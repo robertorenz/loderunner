@@ -1000,11 +1000,26 @@ function drawFigure(a, colors) {
     }
     case 'rope': {
       headY += h * 0.12; neckY += h * 0.12; hipY += h * 0.1;
-      const c = Math.sin(ph * 0.8) * 0.06;
-      armL = [-h * 0.14, headY - h * 0.2];
-      armR = [h * 0.14, headY - h * 0.2];
-      legL = [(-0.1 + c) * h, hipY + h * 0.36];
-      legR = [(0.1 + c) * h, hipY + h * 0.36];
+      const ropeY = headY - h * 0.2;
+      const cx0 = Math.round(a.x);
+      const moving = a.guard ? (a.next && a.next[0] !== cx0) : (Input.left || Input.right);
+      if (moving) {
+        // hand over hand: the cycle is tied to distance traveled, so each
+        // hand releases, swings past the other, and re-grips the rope
+        const t = a.x * Math.PI * 2.4;
+        const s1 = Math.sin(t), s2 = Math.sin(t + Math.PI);
+        armL = [s1 * h * 0.26, ropeY + (1 - Math.abs(s1)) * h * 0.10];
+        armR = [s2 * h * 0.26, ropeY + (1 - Math.abs(s2)) * h * 0.10];
+        const sway = Math.sin(t) * 0.05;
+        legL = [(-0.08 - sway) * h - dir * h * 0.06, hipY + h * 0.34];
+        legR = [(0.08 - sway) * h - dir * h * 0.06, hipY + h * 0.36];
+      } else {
+        const c = Math.sin(ph * 0.8) * 0.06;
+        armL = [-h * 0.14, ropeY];
+        armR = [h * 0.14, ropeY];
+        legL = [(-0.1 + c) * h, hipY + h * 0.36];
+        legR = [(0.1 + c) * h, hipY + h * 0.36];
+      }
       break;
     }
     case 'fall': {
