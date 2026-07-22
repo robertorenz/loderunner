@@ -71,6 +71,11 @@ function loadLevel(idx) {
     }
   }
   G.goldLeft = G.goldTotal;
+  // classic pacing: each guard's speed drops as the guard count rises
+  // (derived from the original's move-scheduling table)
+  const GUARD_SPEED = [0.67, 0.67, 0.50, 0.44, 0.42, 0.40, 0.39, 0.38, 0.375, 0.37, 0.367, 0.364];
+  const f = GUARD_SPEED[Math.min(G.guards.length, GUARD_SPEED.length - 1)];
+  for (const g of G.guards) g.speed = RUN_SPEED * f;
   G.level = idx;
   SAVE.last = idx; persist();
   updateHud(true);
@@ -349,56 +354,117 @@ function respawnGuard(g) {
 // ---------------- Guard AI ----------------
 function guardBlocked(x, y, self) {
   if (solidAt(x, y)) return true;
+  if (baseTile(x, y) === T.TRAP) return true;   // guards can't step into false bricks sideways
   if (G.guards.some(g => g !== self && (g.state === 'trapped' || g.state === 'exiting') &&
       Math.round(g.x) === x && Math.round(g.y) === y)) return true;
   return false;
 }
 
-// legal moves for a guard standing at cell (x,y) — falling is forced
-function guardMoves(x, y, self) {
-  const t = tileAt(x, y);
-  const sup = supportAt(x, y) || t === T.LADDER || t === T.ROPE;
-  if (!sup) return [[x, y + 1]];
-  const out = [];
-  if (t === T.LADDER && !guardBlocked(x, y - 1, self) && y > 0) out.push([x, y - 1]);
-  if (!guardBlocked(x - 1, y, self)) out.push([x - 1, y]);
-  if (!guardBlocked(x + 1, y, self)) out.push([x + 1, y]);
-  if (y + 1 < ROWS && !guardBlocked(x, y + 1, self)) out.push([x, y + 1]);
-  return out;
+// something under (x,y) an actor could stand on (used by the floor scans)
+function footingAt(x, y) {
+  if (y + 1 >= ROWS) return true;
+  const b = tileAt(x, y + 1);
+  return b === T.BRICK || b === T.SOLID || b === T.LADDER;
 }
 
+// ---- classic guard AI, ported from the original Apple II algorithm ----
+// (same-row pursuit, then a floor scan rating every drop-off and ladder
+//  by which row it reaches relative to the runner)
 function guardChooseNext(g) {
   const gx = Math.round(g.x), gy = Math.round(g.y);
   const rx = Math.round(G.runner.x), ry = Math.round(G.runner.y);
   if (gx === rx && gy === ry) return null;
-  // BFS over guard-legal moves
-  const prev = new Int16Array(COLS * ROWS).fill(-1);
-  const start = keyOf(gx, gy);
-  prev[start] = start;
-  const queue = [start];
-  let qi = 0, found = -1;
-  while (qi < queue.length) {
-    const cur = queue[qi++];
-    const cx = cur % COLS, cy = (cur / COLS) | 0;
-    if (cx === rx && cy === ry) { found = cur; break; }
-    for (const [nx, ny] of guardMoves(cx, cy, g)) {
-      if (nx < 0 || nx >= COLS || ny < 0 || ny >= ROWS) continue;
-      const nk = keyOf(nx, ny);
-      if (prev[nk] === -1) { prev[nk] = cur; queue.push(nk); }
+  const act = classicBestMove(g, gx, gy, rx, ry);
+  switch (act) {
+    case 'left':  return guardBlocked(gx - 1, gy, g) ? null : [gx - 1, gy];
+    case 'right': return guardBlocked(gx + 1, gy, g) ? null : [gx + 1, gy];
+    case 'up':    return (gy <= 0 || guardBlocked(gx, gy - 1, g)) ? null : [gx, gy - 1];
+    case 'down':  return (gy + 1 >= ROWS || solidAt(gx, gy + 1)) ? null : [gx, gy + 1];
+    default: return null;
+  }
+}
+
+function classicBestMove(g, gx, gy, rx, ry) {
+  // 1) same-row pursuit: if an unbroken walkable line reaches the runner, charge at him
+  if (gy === ry && !G.runner.falling) {
+    let x = gx;
+    while (x !== rx) {
+      const t = tileAt(x, gy);
+      const below = gy + 1 >= ROWS ? T.SOLID : tileAt(x, gy + 1);
+      const walkable = t === T.LADDER || t === T.ROPE ||
+        below === T.SOLID || below === T.BRICK || below === T.LADDER || below === T.ROPE ||
+        (gy + 1 < ROWS && (G.goldMap[gy + 1][x] || trappedGuardAt(x, gy + 1)));
+      if (!walkable) break;
+      x += x < rx ? 1 : -1;
     }
+    if (x === rx) return gx < rx ? 'right' : gx > rx ? 'left' : (g.x < G.runner.x ? 'right' : 'left');
   }
-  if (found !== -1) {
-    // walk back to the first step
-    let cur = found;
-    while (prev[cur] !== start) cur = prev[cur];
-    return [cur % COLS, (cur / COLS) | 0];
+  // 2) otherwise scan this floor for the best way toward the runner's row
+  return scanFloor(gx, gy, rx, ry);
+}
+
+function scanFloor(gx, gy, rx, ry) {
+  let bestRating = 255, bestPath = null;
+  const rate = (x, y) => y === ry ? Math.abs(gx - x) : (y > ry ? y - ry + 200 : ry - y + 100);
+  const consider = (r, path) => { if (r < bestRating) { bestRating = r; bestPath = path; } };
+  const sideExit = (x, y) =>
+    (x > 0 && (footingAt(x - 1, y) || tileAt(x - 1, y) === T.ROPE)) ||
+    (x < COLS - 1 && (footingAt(x + 1, y) || tileAt(x + 1, y) === T.ROPE));
+
+  // simulate dropping down from column x: where would we end up?
+  const scanDown = (x, path) => {
+    let y = gy;
+    while (y < ROWS - 1 && !solidAt(x, y + 1)) {
+      // hanging onto a ladder/rope lets the guard exit sideways once level with the runner
+      if (tileAt(x, y) !== T.EMPTY && sideExit(x, y) && y >= ry) break;
+      y++;
+    }
+    consider(rate(x, y), path);
+  };
+  // simulate climbing the ladder at column x
+  const scanUp = (x, path) => {
+    let y = gy;
+    while (y > 0 && tileAt(x, y) === T.LADDER) {
+      y--;
+      if (sideExit(x, y) && y <= ry) break;
+    }
+    consider(rate(x, y), path);
+  };
+
+  // find how far this floor extends (guards may drop off its ends)
+  let x = gx;
+  while (x > 0) {
+    const t = tileAt(x - 1, gy);
+    if (t === T.BRICK || t === T.SOLID) break;
+    x--;
+    if (!(t === T.LADDER || t === T.ROPE || footingAt(x, gy))) break;
   }
-  // unreachable: shuffle toward the runner if physically possible
-  const moves = guardMoves(gx, gy, g);
-  if (!moves.length) return null;
-  moves.sort((a, b) =>
-    (Math.abs(a[0] - rx) + Math.abs(a[1] - ry)) - (Math.abs(b[0] - rx) + Math.abs(b[1] - ry)));
-  return Math.random() < 0.8 ? moves[0] : moves[Math.floor(Math.random() * moves.length)];
+  const leftEnd = x;
+  x = gx;
+  while (x < COLS - 1) {
+    const t = tileAt(x + 1, gy);
+    if (t === T.BRICK || t === T.SOLID) break;
+    x++;
+    if (!(t === T.LADDER || t === T.ROPE || footingAt(x, gy))) break;
+  }
+  const rightEnd = x;
+
+  // rate the guard's own column first, then sweep the floor from the far ends inward
+  if (gy < ROWS - 1 && !solidAt(gx, gy + 1)) scanDown(gx, 'down');
+  if (tileAt(gx, gy) === T.LADDER) scanUp(gx, 'up');
+
+  x = leftEnd;
+  let path = 'left';
+  while (true) {
+    if (x === gx) {
+      if (path === 'left' && rightEnd !== gx) { path = 'right'; x = rightEnd; }
+      else break;
+    }
+    if (gy < ROWS - 1 && !solidAt(x, gy + 1)) scanDown(x, path);
+    if (tileAt(x, gy) === T.LADDER) scanUp(x, path);
+    x += path === 'left' ? 1 : -1;
+  }
+  return bestPath;
 }
 
 function updateGuard(g, dt) {
@@ -513,11 +579,10 @@ function postMoveGuard(g) {
   // gold pickup / drop
   if (g.state === 'normal') {
     if (!g.carry && G.goldMap[cy][cx] && Math.abs(g.x - cx) < 0.2 && Math.abs(g.y - cy) < 0.2) {
-      if (Math.random() < 0.22) {
-        g.carry = true;
-        g.carryT = 5 + Math.random() * 9;
-        G.goldMap[cy][cx] = false;
-      }
+      // classic: guards always take gold they pass, and carry it 14-39 steps
+      g.carry = true;
+      g.carryT = (14 + Math.floor(Math.random() * 26)) / g.speed;
+      G.goldMap[cy][cx] = false;
     }
   }
 }
@@ -527,7 +592,8 @@ function updateGuardCarry(g, dt) {
   g.carryT -= dt;
   const cx = Math.round(g.x), cy = Math.round(g.y);
   if (g.carryT <= 0 && cy >= 0 && cy < ROWS &&
-      !G.goldMap[cy][cx] && supportAt(cx, cy) && !holeAt(cx, cy) &&
+      !G.goldMap[cy][cx] && tileAt(cx, cy) === T.EMPTY &&
+      supportAt(cx, cy) && !holeAt(cx, cy) &&
       Math.abs(g.x - cx) < 0.1 && Math.abs(g.y - cy) < 0.1) {
     G.goldMap[cy][cx] = true;
     g.carry = false;
