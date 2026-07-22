@@ -123,7 +123,7 @@ function supportAt(x, y) {
 function holeAt(x, y) { return G.holes.get(keyOf(x, y)); }
 
 // ---------------- Input ----------------
-const Input = { left: false, right: false, up: false, down: false, digL: false, digR: false, dig: false };
+const Input = { left: false, right: false, up: false, down: false, digL: false, digR: false };
 const KEYMAP = {
   ArrowLeft: 'left', a: 'left', A: 'left',
   ArrowRight: 'right', d: 'right', D: 'right',
@@ -131,7 +131,6 @@ const KEYMAP = {
   ArrowDown: 'down', s: 'down', S: 'down',
   z: 'digL', Z: 'digL',
   x: 'digR', X: 'digR',
-  ' ': 'dig',
 };
 
 window.addEventListener('keydown', e => {
@@ -194,8 +193,8 @@ function updateRunner(dt) {
   r.falling = false;
 
   // --- digging ---
-  if ((Input.digL || Input.digR || Input.dig) && !onRope) {
-    const d = Input.digL ? -1 : (Input.digR ? 1 : r.dir);   // Space digs on the facing side
+  if ((Input.digL || Input.digR) && !onRope) {
+    const d = Input.digL ? -1 : 1;
     if (tryDig(cx, cy, d)) { r.dir = d; r.digT = DIG_TIME; return; }
   }
 
@@ -442,29 +441,14 @@ function updateGuard(g, dt) {
   const centeredY = Math.abs(g.y - cy) < 0.01;
   const t = tileAt(cx, cy);
 
-  // falling (forced) — a ladder anywhere the body overlaps counts as support,
-  // so guards can climb onto and stand on ladder tops without oscillating
-  const onLadderBody = ladderAt(cx, Math.floor(g.y)) || ladderAt(cx, Math.ceil(g.y));
-  const sup = (centeredY && supportAt(cx, cy)) || onLadderBody || (t === T.ROPE && centeredY);
-  if (!sup) {
-    g.falling = true; g.next = null;
-    g.x += Math.sign(cx - g.x) * Math.min(Math.abs(cx - g.x), g.speed * dt);
-    const ny = g.y + FALL_SPEED * 0.9 * dt;
-    const nextCy = Math.round(ny);
-    if (ropeAt(cx, nextCy) && g.y < nextCy && ny >= nextCy) { g.y = nextCy; g.falling = false; }
-    else if (ny >= nextCy && (supportAt(cx, nextCy) || ladderAt(cx, nextCy))) { g.y = nextCy; g.falling = false; }
-    else g.y = ny;
-    postMoveGuard(g);
-    return;
-  }
-  g.falling = false;
-
-  // landed in an open hole -> trapped
+  // sitting in an open hole -> trapped (checked before the fall logic:
+  // holes catch guards even when there is only air beneath them)
   const h = holeAt(cx, cy);
-  if (h && centeredY) {
+  if (h && !h.opening && !h.closing && centeredY) {
     g.state = 'trapped';
     g.t = TRAP_TIME;
     g.next = null;
+    g.falling = false;
     h.age = Math.min(h.age, HOLE_LIFE - 1.2);   // hole stays at least a bit longer
     G.score += SCORE_TRAP;
     Sfx.trap();
@@ -474,6 +458,26 @@ function updateGuard(g, dt) {
     }
     return;
   }
+
+  // falling (forced) — a ladder anywhere the body overlaps counts as support,
+  // so guards can climb onto and stand on ladder tops without oscillating
+  const onLadderBody = ladderAt(cx, Math.floor(g.y)) || ladderAt(cx, Math.ceil(g.y));
+  const sup = (centeredY && supportAt(cx, cy)) || onLadderBody || (t === T.ROPE && centeredY);
+  if (!sup) {
+    g.falling = true; g.next = null;
+    g.x += Math.sign(cx - g.x) * Math.min(Math.abs(cx - g.x), g.speed * dt);
+    const ny = g.y + FALL_SPEED * 0.9 * dt;
+    const nextCy = Math.round(ny);
+    const hFall = holeAt(cx, nextCy);
+    if (ropeAt(cx, nextCy) && g.y < nextCy && ny >= nextCy) { g.y = nextCy; g.falling = false; }
+    // an open hole always catches a guard, even with nothing but air below it
+    else if (hFall && !hFall.opening && !hFall.closing && g.y < nextCy && ny >= nextCy) { g.y = nextCy; g.falling = false; }
+    else if (ny >= nextCy && (supportAt(cx, nextCy) || ladderAt(cx, nextCy))) { g.y = nextCy; g.falling = false; }
+    else g.y = ny;
+    postMoveGuard(g);
+    return;
+  }
+  g.falling = false;
 
   // pick a destination when we arrive at a cell center
   if (!g.next) {
@@ -1288,7 +1292,7 @@ function showStart() {
     <div class="modal-sub">HD REMASTER &middot; ALL 150 ORIGINAL LEVELS &middot; 1983 CLASSIC</div>
     <div class="help-grid">
       <span class="k">← → ↑ ↓</span><span>Run, climb ladders, hang from ropes</span>
-      <span class="k">SPACE</span><span>Dig through the brick you're facing (Z/X: dig left/right)</span>
+      <span class="k">Z / X</span><span>Dig left / right through brick floors</span>
       <span class="k">P &nbsp; R &nbsp; M</span><span>Pause &middot; Restart level &middot; Sound on/off</span>
     </div>
     <div class="modal-sub" style="margin-top:1rem">
