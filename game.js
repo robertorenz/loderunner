@@ -432,8 +432,10 @@ function updateGuard(g, dt) {
   const centeredY = Math.abs(g.y - cy) < 0.01;
   const t = tileAt(cx, cy);
 
-  // falling (forced)
-  const sup = (centeredY && supportAt(cx, cy)) || t === T.LADDER || (t === T.ROPE && centeredY);
+  // falling (forced) — a ladder anywhere the body overlaps counts as support,
+  // so guards can climb onto and stand on ladder tops without oscillating
+  const onLadderBody = ladderAt(cx, Math.floor(g.y)) || ladderAt(cx, Math.ceil(g.y));
+  const sup = (centeredY && supportAt(cx, cy)) || onLadderBody || (t === T.ROPE && centeredY);
   if (!sup) {
     g.falling = true; g.next = null;
     g.x += Math.sign(cx - g.x) * Math.min(Math.abs(cx - g.x), g.speed * dt);
