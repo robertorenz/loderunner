@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lode Runner — HD Remaster</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <header id="hud">
+    <div class="hud-left">
+      <div class="hud-title">LODE&nbsp;RUNNER<span class="hd-tag">HD</span></div>
+      <div class="hud-stat"><span class="hud-label">LEVEL</span><span id="hud-level" class="hud-value">001</span></div>
+    </div>
+    <div class="hud-center">
+      <div class="hud-stat"><span class="hud-label">SCORE</span><span id="hud-score" class="hud-value">0</span></div>
+      <div class="hud-stat"><span class="hud-label">HIGH</span><span id="hud-hiscore" class="hud-value">0</span></div>
+      <div class="hud-stat"><span class="hud-label">GOLD</span><span id="hud-gold" class="hud-value">0/0</span></div>
+      <div class="hud-stat"><span class="hud-label">LIVES</span><span id="hud-lives" class="hud-value">5</span></div>
+    </div>
+    <div class="hud-right">
+      <button class="hud-btn" id="btn-levels" title="Level select (L)">LEVELS</button>
+      <button class="hud-btn" id="btn-restart" title="Restart level (R)">RESTART</button>
+      <button class="hud-btn" id="btn-pause" title="Pause (P)">PAUSE</button>
+      <button class="hud-btn" id="btn-sound" title="Sound (M)">SOUND: ON</button>
+    </div>
+  </header>
+
+  <main id="stage">
+    <canvas id="game"></canvas>
+  </main>
+
+  <footer id="keys-bar">
+    <span><b>←→↑↓</b> / <b>WASD</b> move</span>
+    <span><b>Z</b> dig left</span>
+    <span><b>X</b> dig right</span>
+    <span><b>P</b> pause</span>
+    <span><b>R</b> restart</span>
+    <span><b>M</b> sound</span>
+  </footer>
+
+  <!-- Modal system -->
+  <div id="modal-backdrop" class="hidden">
+    <div id="modal" role="dialog" aria-modal="true">
+      <div id="modal-content"></div>
+    </div>
+  </div>
+</div>
+
+<script src="levels.js"></script>
+<script src="audio.js"></script>
+<script src="game.js"></script>
+</body>
+</html>

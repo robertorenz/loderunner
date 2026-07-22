@@ -1,0 +1,272 @@
+/* ============ Lode Runner HD — professional dark theme ============ */
+:root {
+  --bg-0: #0b0f16;
+  --bg-1: #111826;
+  --bg-2: #18202e;
+  --panel: #151d2b;
+  --line: #263349;
+  --text: #dfe7f2;
+  --text-dim: #8b98ac;
+  --gold: #f2b632;
+  --gold-bright: #ffd257;
+  --accent: #3fa7d6;
+  --danger: #e2574c;
+  --ok: #4caf7d;
+  --radius: 10px;
+  font-size: 16px;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  background: var(--bg-0);
+  color: var(--text);
+  font-family: "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+  overflow: hidden;
+}
+
+#app {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---------------- HUD ---------------- */
+#hud {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.55rem 1.1rem;
+  background: linear-gradient(180deg, var(--bg-2), var(--bg-1));
+  border-bottom: 1px solid var(--line);
+  user-select: none;
+  flex: 0 0 auto;
+}
+
+.hud-left, .hud-center, .hud-right {
+  display: flex;
+  align-items: center;
+  gap: 1.2rem;
+}
+
+.hud-title {
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  font-size: 1.05rem;
+  color: var(--gold);
+  text-shadow: 0 0 14px rgba(242, 182, 50, 0.35);
+  white-space: nowrap;
+}
+
+.hd-tag {
+  margin-left: 0.45em;
+  font-size: 0.62em;
+  vertical-align: 0.25em;
+  color: var(--bg-0);
+  background: var(--gold);
+  border-radius: 4px;
+  padding: 0.1em 0.4em;
+  letter-spacing: 0.1em;
+}
+
+.hud-stat { display: flex; flex-direction: column; align-items: center; min-width: 3.6rem; }
+.hud-label { font-size: 0.6rem; letter-spacing: 0.22em; color: var(--text-dim); }
+.hud-value {
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 1.12rem;
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+#hud-gold  { color: var(--gold-bright); }
+#hud-lives { color: var(--danger); }
+
+.hud-btn {
+  background: var(--panel);
+  color: var(--text-dim);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font: 600 0.68rem/1 "Segoe UI", sans-serif;
+  letter-spacing: 0.14em;
+  padding: 0.55rem 0.8rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+.hud-btn:hover { color: var(--gold); border-color: var(--gold); }
+
+/* ---------------- Stage ---------------- */
+#stage {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+  padding: 10px;
+  background:
+    radial-gradient(1200px 700px at 50% 30%, rgba(63, 167, 214, 0.05), transparent 60%),
+    var(--bg-0);
+}
+
+#game {
+  border-radius: 6px;
+  box-shadow:
+    0 0 0 1px var(--line),
+    0 24px 70px rgba(0, 0, 0, 0.6),
+    0 0 90px rgba(242, 182, 50, 0.05);
+  max-width: 100%;
+  max-height: 100%;
+}
+
+/* ---------------- Keys bar ---------------- */
+#keys-bar {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: center;
+  gap: 2.2rem;
+  padding: 0.45rem 1rem;
+  background: var(--bg-1);
+  border-top: 1px solid var(--line);
+  color: var(--text-dim);
+  font-size: 0.72rem;
+  letter-spacing: 0.05em;
+  user-select: none;
+}
+#keys-bar b { color: var(--text); font-family: Consolas, monospace; }
+
+/* ---------------- Modals ---------------- */
+#modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 8, 13, 0.72);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  opacity: 1;
+  transition: opacity 0.2s ease;
+}
+#modal-backdrop.hidden { display: none; }
+
+#modal {
+  background: linear-gradient(180deg, #1a2334, var(--panel));
+  border: 1px solid var(--line);
+  border-top: 2px solid var(--gold);
+  border-radius: var(--radius);
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.7);
+  max-width: min(680px, 92vw);
+  max-height: 88vh;
+  overflow: auto;
+  animation: modal-in 0.22s cubic-bezier(0.2, 0.9, 0.3, 1.2);
+}
+
+@keyframes modal-in {
+  from { transform: translateY(16px) scale(0.97); opacity: 0; }
+  to   { transform: none; opacity: 1; }
+}
+
+#modal-content { padding: 2rem 2.4rem; }
+
+.modal-title {
+  font-size: 1.7rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  color: var(--gold);
+  text-align: center;
+  text-shadow: 0 0 22px rgba(242, 182, 50, 0.4);
+  margin-bottom: 0.4rem;
+}
+.modal-sub {
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  letter-spacing: 0.08em;
+  margin-bottom: 1.4rem;
+}
+.modal-big-score {
+  text-align: center;
+  font-family: Consolas, monospace;
+  font-size: 2.2rem;
+  font-weight: 700;
+  color: var(--gold-bright);
+  margin: 0.6rem 0 1.2rem;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 0.8rem;
+  justify-content: center;
+  margin-top: 1.4rem;
+  flex-wrap: wrap;
+}
+
+.btn {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-2);
+  color: var(--text);
+  font: 700 0.8rem/1 "Segoe UI", sans-serif;
+  letter-spacing: 0.12em;
+  padding: 0.85rem 1.6rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.btn:hover { border-color: var(--gold); color: var(--gold); transform: translateY(-1px); }
+.btn.primary {
+  background: linear-gradient(180deg, var(--gold-bright), var(--gold));
+  color: #1a1405;
+  border-color: transparent;
+  box-shadow: 0 4px 18px rgba(242, 182, 50, 0.35);
+}
+.btn.primary:hover { filter: brightness(1.08); color: #1a1405; transform: translateY(-1px); }
+
+/* instructions table */
+.help-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.45rem 1.1rem;
+  margin: 1rem auto;
+  max-width: 420px;
+  font-size: 0.85rem;
+  color: var(--text-dim);
+}
+.help-grid .k {
+  font-family: Consolas, monospace;
+  color: var(--text);
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 0.15rem 0.5rem;
+  text-align: center;
+  font-size: 0.78rem;
+}
+
+/* level select */
+.level-grid {
+  display: grid;
+  grid-template-columns: repeat(10, 1fr);
+  gap: 0.4rem;
+  margin-top: 1rem;
+}
+.level-cell {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg-2);
+  color: var(--text-dim);
+  font: 600 0.72rem/1 Consolas, monospace;
+  padding: 0.55rem 0;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+.level-cell:hover { border-color: var(--gold); color: var(--gold); }
+.level-cell.done { background: rgba(76, 175, 125, 0.12); color: var(--ok); border-color: rgba(76, 175, 125, 0.4); }
+.level-cell.current { background: rgba(242, 182, 50, 0.15); color: var(--gold-bright); border-color: var(--gold); }
+
+@media (max-width: 900px) {
+  .hud-left .hud-title { display: none; }
+  #keys-bar { gap: 1rem; font-size: 0.65rem; }
+}
