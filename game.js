@@ -361,10 +361,18 @@ function guardBlocked(x, y, self) {
   return false;
 }
 
-// something under (x,y) an actor could stand on (used by the floor scans)
-function footingAt(x, y) {
+// the guards' mental map: like tileAt, but dug holes still look like solid
+// bricks — guards can't see holes, which is what makes them trappable
+function aiTileAt(x, y) {
+  const t = baseTile(x, y);
+  if (t === T.HLADDER) return G.revealed ? T.LADDER : T.EMPTY;
+  if (t === T.TRAP) return T.EMPTY;
+  return t;
+}
+function aiSolidAt(x, y) { const t = aiTileAt(x, y); return t === T.BRICK || t === T.SOLID; }
+function aiFootingAt(x, y) {
   if (y + 1 >= ROWS) return true;
-  const b = tileAt(x, y + 1);
+  const b = aiTileAt(x, y + 1);
   return b === T.BRICK || b === T.SOLID || b === T.LADDER;
 }
 
@@ -386,12 +394,13 @@ function guardChooseNext(g) {
 }
 
 function classicBestMove(g, gx, gy, rx, ry) {
-  // 1) same-row pursuit: if an unbroken walkable line reaches the runner, charge at him
+  // 1) same-row pursuit: if an unbroken walkable line reaches the runner, charge
+  //    at him — judged on the base map, so dug holes don't deter the charge
   if (gy === ry && !G.runner.falling) {
     let x = gx;
     while (x !== rx) {
-      const t = tileAt(x, gy);
-      const below = gy + 1 >= ROWS ? T.SOLID : tileAt(x, gy + 1);
+      const t = aiTileAt(x, gy);
+      const below = gy + 1 >= ROWS ? T.SOLID : aiTileAt(x, gy + 1);
       const walkable = t === T.LADDER || t === T.ROPE ||
         below === T.SOLID || below === T.BRICK || below === T.LADDER || below === T.ROPE ||
         (gy + 1 < ROWS && (G.goldMap[gy + 1][x] || trappedGuardAt(x, gy + 1)));
@@ -408,16 +417,18 @@ function scanFloor(gx, gy, rx, ry) {
   let bestRating = 255, bestPath = null;
   const rate = (x, y) => y === ry ? Math.abs(gx - x) : (y > ry ? y - ry + 200 : ry - y + 100);
   const consider = (r, path) => { if (r < bestRating) { bestRating = r; bestPath = path; } };
+  // all probing below uses the guards' base-map view (aiTileAt): dug holes
+  // are invisible, so guards happily plan routes straight across them
   const sideExit = (x, y) =>
-    (x > 0 && (footingAt(x - 1, y) || tileAt(x - 1, y) === T.ROPE)) ||
-    (x < COLS - 1 && (footingAt(x + 1, y) || tileAt(x + 1, y) === T.ROPE));
+    (x > 0 && (aiFootingAt(x - 1, y) || aiTileAt(x - 1, y) === T.ROPE)) ||
+    (x < COLS - 1 && (aiFootingAt(x + 1, y) || aiTileAt(x + 1, y) === T.ROPE));
 
   // simulate dropping down from column x: where would we end up?
   const scanDown = (x, path) => {
     let y = gy;
-    while (y < ROWS - 1 && !solidAt(x, y + 1)) {
+    while (y < ROWS - 1 && !aiSolidAt(x, y + 1)) {
       // hanging onto a ladder/rope lets the guard exit sideways once level with the runner
-      if (tileAt(x, y) !== T.EMPTY && sideExit(x, y) && y >= ry) break;
+      if (aiTileAt(x, y) !== T.EMPTY && sideExit(x, y) && y >= ry) break;
       y++;
     }
     consider(rate(x, y), path);
@@ -425,20 +436,22 @@ function scanFloor(gx, gy, rx, ry) {
   // simulate climbing the ladder at column x
   const scanUp = (x, path) => {
     let y = gy;
-    while (y > 0 && tileAt(x, y) === T.LADDER) {
+    while (y > 0 && aiTileAt(x, y) === T.LADDER) {
       y--;
       if (sideExit(x, y) && y <= ry) break;
     }
     consider(rate(x, y), path);
   };
 
-  // find how far this floor extends (guards may drop off its ends)
+  // find how far this floor extends (guards may drop off its ends);
+  // the cells of the walking row itself use the live map (dug side-passages
+  // are walkable) while the floor beneath uses the base map
   let x = gx;
   while (x > 0) {
     const t = tileAt(x - 1, gy);
     if (t === T.BRICK || t === T.SOLID) break;
     x--;
-    if (!(t === T.LADDER || t === T.ROPE || footingAt(x, gy))) break;
+    if (!(t === T.LADDER || t === T.ROPE || aiFootingAt(x, gy))) break;
   }
   const leftEnd = x;
   x = gx;
@@ -446,13 +459,13 @@ function scanFloor(gx, gy, rx, ry) {
     const t = tileAt(x + 1, gy);
     if (t === T.BRICK || t === T.SOLID) break;
     x++;
-    if (!(t === T.LADDER || t === T.ROPE || footingAt(x, gy))) break;
+    if (!(t === T.LADDER || t === T.ROPE || aiFootingAt(x, gy))) break;
   }
   const rightEnd = x;
 
   // rate the guard's own column first, then sweep the floor from the far ends inward
-  if (gy < ROWS - 1 && !solidAt(gx, gy + 1)) scanDown(gx, 'down');
-  if (tileAt(gx, gy) === T.LADDER) scanUp(gx, 'up');
+  if (gy < ROWS - 1 && !aiSolidAt(gx, gy + 1)) scanDown(gx, 'down');
+  if (aiTileAt(gx, gy) === T.LADDER) scanUp(gx, 'up');
 
   x = leftEnd;
   let path = 'left';
@@ -461,8 +474,8 @@ function scanFloor(gx, gy, rx, ry) {
       if (path === 'left' && rightEnd !== gx) { path = 'right'; x = rightEnd; }
       else break;
     }
-    if (gy < ROWS - 1 && !solidAt(x, gy + 1)) scanDown(x, path);
-    if (tileAt(x, gy) === T.LADDER) scanUp(x, path);
+    if (gy < ROWS - 1 && !aiSolidAt(x, gy + 1)) scanDown(x, path);
+    if (aiTileAt(x, gy) === T.LADDER) scanUp(x, path);
     x += path === 'left' ? 1 : -1;
   }
   return bestPath;
