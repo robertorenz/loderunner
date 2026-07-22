@@ -13,7 +13,7 @@ const RUN_SPEED   = 5.2;   // tiles / second
 const CLIMB_SPEED = 4.4;
 const FALL_SPEED  = 8.0;
 const GUARD_FACTOR = 0.62;
-const DIG_TIME    = 0.30;
+const DIG_TIME    = 0.55;  // time to shovel out one brick
 const HOLE_LIFE   = 6.2;   // seconds a dug hole stays open
 const HOLE_CLOSE  = 0.42;  // closing animation time
 const TRAP_TIME   = 2.3;   // guard stuck in hole before climbing out
@@ -99,7 +99,10 @@ function baseTile(x, y) {
 // effective tile (holes open bricks, hidden ladders appear)
 function tileAt(x, y) {
   const t = baseTile(x, y);
-  if (t === T.BRICK && G.holes.has(keyOf(x, y))) return T.EMPTY;
+  if (t === T.BRICK && G.holes.has(keyOf(x, y))) {
+    // while being shoveled out, the brick is still solid
+    return G.holes.get(keyOf(x, y)).opening ? T.BRICK : T.EMPTY;
+  }
   if (t === T.HLADDER) return G.revealed ? T.LADDER : T.EMPTY;
   if (t === T.TRAP) return T.EMPTY;   // false brick: passable, no support
   return t;
@@ -277,8 +280,7 @@ function tryDig(cx, cy, d) {
     const gx = Math.round(g.x), gy = Math.round(g.y);
     if ((gx === tx && gy === ty) || (gx === tx && gy === cy)) return false;
   }
-  G.holes.set(keyOf(tx, ty), { x: tx, y: ty, age: 0, closing: false, closeT: 0 });
-  spawnDebris(tx, ty);
+  G.holes.set(keyOf(tx, ty), { x: tx, y: ty, age: 0, closing: false, closeT: 0, opening: true, openT: 0, chip: 0 });
   Sfx.dig();
   return true;
 }
@@ -286,6 +288,14 @@ function tryDig(cx, cy, d) {
 // ---------------- Holes ----------------
 function updateHoles(dt) {
   for (const [k, h] of [...G.holes]) {
+    if (h.opening) {
+      // being shoveled out: chip away with bursts of debris
+      h.openT += dt;
+      h.chip -= dt;
+      if (h.chip <= 0) { h.chip = 0.13; spawnDebris(h.x, h.y, 4); }
+      if (h.openT >= DIG_TIME) { h.opening = false; h.age = 0; }
+      continue;
+    }
     h.age += dt;
     if (!h.closing && h.age >= HOLE_LIFE) { h.closing = true; h.closeT = 0; }
     if (h.closing) {
@@ -547,8 +557,8 @@ function checkGuardCollision() {
 }
 
 // ---------------- Particles ----------------
-function spawnDebris(cx, cy) {
-  for (let i = 0; i < 12; i++) {
+function spawnDebris(cx, cy, count = 12) {
+  for (let i = 0; i < count; i++) {
     G.particles.push({
       x: cx + (Math.random() - 0.5) * 0.6,
       y: cy + (Math.random() - 0.5) * 0.4,
@@ -920,10 +930,13 @@ function drawFigure(a, colors) {
       break;
     }
     case 'dig': {
-      lean = dir * 0.3;
+      // chopping swing driven by dig progress
+      const p = 1 - Math.max(0, a.digT || 0) / DIG_TIME;
+      const bob = Math.sin(p * Math.PI * 4) * h * 0.06;
+      lean = dir * (0.26 + bob / h);
       hipY += h * 0.06;
-      armL = [dir * h * 0.42, hipY + h * 0.18];
-      armR = [dir * h * 0.34, hipY + h * 0.28];
+      armL = [dir * h * 0.42, hipY + h * 0.16 + bob];
+      armR = [dir * h * 0.30, hipY + h * 0.24 + bob];
       legL = [-dir * h * 0.2, hipY + h * 0.36];
       legR = [dir * h * 0.16, hipY + h * 0.4];
       break;
@@ -1058,6 +1071,39 @@ function drawFigure(a, colors) {
     ctx.fillRect(-headR * 0.18, headY - headR * 0.75, headR * 0.36, headR * 0.2);
   }
 
+  // shovel while digging
+  if (pose === 'dig') {
+    const [hx1, hy1] = armL;   // lower/leading hand grips the shaft
+    const [hx0, hy0] = armR;
+    const tipX = hx1 + dir * h * 0.30, tipY = hy1 + h * 0.26;
+    // wooden shaft runs through both hands to the blade
+    ctx.strokeStyle = '#8a6238';
+    ctx.lineWidth = lw * 0.5;
+    ctx.beginPath();
+    ctx.moveTo(hx0 - dir * h * 0.1, hy0 - h * 0.12);
+    ctx.lineTo(tipX, tipY);
+    ctx.stroke();
+    // steel blade
+    ctx.save();
+    ctx.translate(tipX, tipY);
+    ctx.rotate(dir * 0.85);
+    const bg2 = ctx.createLinearGradient(0, -h * 0.1, 0, h * 0.1);
+    bg2.addColorStop(0, '#d3dde9');
+    bg2.addColorStop(1, '#8fa2b8');
+    ctx.fillStyle = bg2;
+    ctx.beginPath();
+    ctx.moveTo(-h * 0.07, -h * 0.1);
+    ctx.lineTo(h * 0.07, -h * 0.1);
+    ctx.quadraticCurveTo(h * 0.09, h * 0.06, 0, h * 0.12);
+    ctx.quadraticCurveTo(-h * 0.09, h * 0.06, -h * 0.07, -h * 0.1);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(40,55,75,0.6)';
+    ctx.lineWidth = Math.max(1, lw * 0.2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
   // carried gold
   if (a.carry) {
     ctx.fillStyle = '#f2b632';
@@ -1099,6 +1145,25 @@ function render() {
         const h = b === T.BRICK ? holeAt(x, y) : null;
         if (!h) {
           ctx.drawImage(sprites.brick, px, py, S, S);
+        } else if (h.opening) {
+          // brick being shoveled out: excavation grows from the top down
+          ctx.drawImage(sprites.brick, px, py, S, S);
+          const p = Math.min(1, h.openT / DIG_TIME);
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(px, py, S, S * p);
+          ctx.clip();
+          drawHole(px, py);
+          ctx.restore();
+          // cracks spreading ahead of the excavation
+          ctx.strokeStyle = 'rgba(20,8,5,0.6)';
+          ctx.lineWidth = Math.max(1, S * 0.03);
+          ctx.beginPath();
+          ctx.moveTo(px + S * 0.3, py + S * p);
+          ctx.lineTo(px + S * 0.22, py + Math.min(S, S * (p + 0.3)));
+          ctx.moveTo(px + S * 0.7, py + S * p);
+          ctx.lineTo(px + S * 0.78, py + Math.min(S, S * (p + 0.25)));
+          ctx.stroke();
         } else if (h.closing) {
           // brick regrows from the top down
           const p = Math.min(1, h.closeT / HOLE_CLOSE);
