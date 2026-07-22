@@ -20,6 +20,7 @@ const TRAP_TIME   = 2.3;   // guard stuck in hole before climbing out
 const SPAWN_TIME  = 1.0;
 const DIE_TIME    = 1.15;
 const WIN_TIME    = 1.1;
+const WIPE_TIME   = 0.65;  // iris circle close/open on death
 
 const SCORE_GOLD  = 250;
 const SCORE_TRAP  = 75;
@@ -681,9 +682,24 @@ function update(dt) {
     updateHoles(dt);
     if (G.stateT >= DIE_TIME) {
       G.lives--;
-      if (G.lives <= 0) { gameOver(); }
-      else { loadLevel(G.level); G.state = 'ready'; }
+      // iris closes on the spot where the runner died
+      G.wipeX = G.runner.x; G.wipeY = G.runner.y;
+      G.state = 'wipeout'; G.stateT = 0;
     }
+  } else if (G.state === 'wipeout') {
+    G.stateT += dt;
+    if (G.stateT >= WIPE_TIME) {
+      if (G.lives <= 0) { gameOver(); }
+      else {
+        // ...and reopens on the runner back at his starting stance
+        loadLevel(G.level);
+        G.wipeX = G.runner.x; G.wipeY = G.runner.y;
+        G.state = 'wipein'; G.stateT = 0;
+      }
+    }
+  } else if (G.state === 'wipein') {
+    G.stateT += dt;
+    if (G.stateT >= WIPE_TIME) { G.state = 'ready'; }
   } else if (G.state === 'won') {
     G.stateT += dt;
     if (G.stateT >= WIN_TIME) showLevelComplete();
@@ -1275,7 +1291,7 @@ function render() {
 
   // actors
   for (const g of G.guards) if (g.state !== 'dead') drawFigure(g, GUARD_COLORS);
-  drawFigure(G.runner, RUNNER_COLORS);
+  if (G.state !== 'wipeout') drawFigure(G.runner, RUNNER_COLORS);
 
   // particles
   for (const p of G.particles) {
@@ -1285,6 +1301,30 @@ function render() {
     ctx.fillRect(p.x * S + S / 2 - sz / 2, p.y * S + S / 2 - sz / 2, sz, sz);
   }
   ctx.globalAlpha = 1;
+
+  // iris wipe: circle closes where the runner died, reopens at the start stance
+  if (G.state === 'wipeout' || G.state === 'wipein') {
+    const w = COLS * S, hgt = ROWS * S;
+    let p = Math.min(1, G.stateT / WIPE_TIME);
+    p = p * p * (3 - 2 * p);   // smoothstep easing
+    const frac = G.state === 'wipeout' ? 1 - p : p;
+    const cx = G.wipeX * S + S / 2, cy = G.wipeY * S + S / 2;
+    const maxR = Math.max(
+      Math.hypot(cx, cy), Math.hypot(w - cx, cy),
+      Math.hypot(cx, hgt - cy), Math.hypot(w - cx, hgt - cy));
+    const r = Math.max(0.001, maxR * frac);
+    ctx.fillStyle = '#04060a';
+    ctx.beginPath();
+    ctx.rect(0, 0, w, hgt);
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fill('evenodd');
+    // thin golden rim on the iris edge
+    ctx.strokeStyle = 'rgba(242,182,50,0.35)';
+    ctx.lineWidth = Math.max(1.5, S * 0.06);
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.stroke();
+  }
 
   // overlays
   if (G.state === 'ready') {
