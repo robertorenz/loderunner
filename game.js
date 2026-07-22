@@ -120,7 +120,7 @@ function supportAt(x, y) {
 function holeAt(x, y) { return G.holes.get(keyOf(x, y)); }
 
 // ---------------- Input ----------------
-const Input = { left: false, right: false, up: false, down: false, digL: false, digR: false };
+const Input = { left: false, right: false, up: false, down: false, digL: false, digR: false, dig: false };
 const KEYMAP = {
   ArrowLeft: 'left', a: 'left', A: 'left',
   ArrowRight: 'right', d: 'right', D: 'right',
@@ -128,6 +128,7 @@ const KEYMAP = {
   ArrowDown: 'down', s: 'down', S: 'down',
   z: 'digL', Z: 'digL',
   x: 'digR', X: 'digR',
+  ' ': 'dig',
 };
 
 window.addEventListener('keydown', e => {
@@ -190,8 +191,8 @@ function updateRunner(dt) {
   r.falling = false;
 
   // --- digging ---
-  if ((Input.digL || Input.digR) && !onRope) {
-    const d = Input.digL ? -1 : 1;
+  if ((Input.digL || Input.digR || Input.dig) && !onRope) {
+    const d = Input.digL ? -1 : (Input.digR ? 1 : r.dir);   // Space digs on the facing side
     if (tryDig(cx, cy, d)) { r.dir = d; r.digT = DIG_TIME; return; }
   }
 
@@ -944,52 +945,116 @@ function drawFigure(a, colors) {
 
   ctx.rotate(lean);
 
-  const drawLimb = (x0, y0, [x1, y1], color, w) => {
-    // simple bent limb: joint bows away from the direct line
+  const shoulderY = neckY + h * 0.05;
+  const backView = pose === 'climb';   // climbing a ladder shows the character's back
+
+  const limbPath = (x0, y0, x1, y1, bowSign) => {
+    // limbs bend softly at an implied joint (knee/elbow)
     const mx = (x0 + x1) / 2, my = (y0 + y1) / 2;
     const dx = x1 - x0, dy = y1 - y0;
     const len = Math.hypot(dx, dy) || 1;
-    const bow = h * 0.06;
-    const jx = mx + (-dy / len) * bow * (x1 >= x0 ? 1 : -1);
-    const jy = my + (dx / len) * bow * 0.3;
-    ctx.strokeStyle = color;
-    ctx.lineWidth = w;
+    const bow = h * 0.055;
+    const jx = mx + (-dy / len) * bow * bowSign;
+    const jy = my + (dx / len) * bow * 0.35;
     ctx.beginPath();
     ctx.moveTo(x0, y0);
     ctx.quadraticCurveTo(jx, jy, x1, y1);
     ctx.stroke();
   };
 
-  // back limbs (darker)
-  drawLimb(0, hipY, legR, colors.dark, lw);
-  drawLimb(0, neckY + h * 0.06, armR, colors.dark, lw * 0.9);
-  // torso
-  ctx.strokeStyle = colors.suit;
-  ctx.lineWidth = lw * 1.55;
+  const drawLeg = ([fx, fy], pants, shade) => {
+    ctx.strokeStyle = shade ? colors.pantsDark : colors.pants;
+    ctx.lineWidth = lw * 1.05;
+    limbPath(0, hipY, fx, fy - h * 0.03, fx >= 0 ? 1 : -1);
+    // shoe: flat oval oriented toward facing direction
+    ctx.fillStyle = colors.shoes;
+    ctx.beginPath();
+    ctx.ellipse(fx + dir * h * 0.035, fy, h * 0.075, h * 0.038, 0, 0, 7);
+    ctx.fill();
+  };
+
+  const drawArm = ([hx, hy], shade) => {
+    ctx.strokeStyle = shade ? colors.shirtDark : colors.shirt;
+    ctx.lineWidth = lw * 0.85;
+    limbPath(0, shoulderY, hx, hy, hx >= 0 ? 1 : -1);
+    // hand
+    ctx.fillStyle = colors.skin;
+    ctx.beginPath();
+    ctx.arc(hx, hy, lw * 0.5, 0, 7);
+    ctx.fill();
+  };
+
+  // back limbs (shaded)
+  drawLeg(legR, colors.pants, true);
+  drawArm(armR, true);
+
+  // torso: shirt tapering from shoulders to hips
+  const shW = h * 0.155, hipW = h * 0.115;
+  const grad = ctx.createLinearGradient(-shW, 0, shW, 0);
+  grad.addColorStop(0, colors.shirtDark);
+  grad.addColorStop(0.45, colors.shirt);
+  grad.addColorStop(1, colors.shirt);
+  ctx.fillStyle = grad;
   ctx.beginPath();
-  ctx.moveTo(0, neckY);
-  ctx.lineTo(0, hipY);
-  ctx.stroke();
+  ctx.moveTo(-shW, shoulderY);
+  ctx.quadraticCurveTo(0, shoulderY - h * 0.045, shW, shoulderY);
+  ctx.lineTo(hipW, hipY + h * 0.02);
+  ctx.lineTo(-hipW, hipY + h * 0.02);
+  ctx.closePath();
+  ctx.fill();
   // belt
-  ctx.strokeStyle = colors.accent;
-  ctx.lineWidth = lw * 0.55;
-  ctx.beginPath();
-  ctx.moveTo(-h * 0.09, hipY - h * 0.02);
-  ctx.lineTo(h * 0.09, hipY - h * 0.02);
-  ctx.stroke();
+  ctx.fillStyle = colors.belt;
+  ctx.fillRect(-hipW, hipY - h * 0.015, hipW * 2, h * 0.045);
+
   // front limbs
-  drawLimb(0, hipY, legL, colors.suit, lw);
-  drawLimb(0, neckY + h * 0.06, armL, colors.suit, lw * 0.9);
-  // head
-  ctx.fillStyle = colors.suit;
+  drawLeg(legL, colors.pants, false);
+  drawArm(armL, false);
+
+  // neck + head
+  ctx.fillStyle = colors.skin;
+  ctx.fillRect(-lw * 0.4, headY + headR * 0.6, lw * 0.8, neckY - headY - headR * 0.4);
   ctx.beginPath();
   ctx.arc(0, headY, headR, 0, 7);
   ctx.fill();
-  // visor / face stripe
-  ctx.fillStyle = colors.accent;
+  // hair: covers the top of the head (all of it in back view)
+  ctx.fillStyle = colors.hair;
   ctx.beginPath();
-  ctx.ellipse(dir * headR * 0.3, headY - headR * 0.05, headR * 0.55, headR * 0.32, 0, 0, 7);
+  if (backView) {
+    ctx.arc(0, headY, headR, 0, 7);
+  } else {
+    ctx.arc(0, headY, headR, Math.PI * 1.02, Math.PI * 1.98);
+    ctx.quadraticCurveTo(dir * headR * 0.9, headY - headR * 0.35, dir * headR * 0.95, headY - headR * 0.1);
+    ctx.quadraticCurveTo(0, headY - headR * 0.35, -dir * headR * 0.98, headY - headR * 0.05);
+  }
+  ctx.closePath();
   ctx.fill();
+  if (!backView) {
+    // eye + simple profile shading on the facing side
+    ctx.fillStyle = '#1c2430';
+    ctx.beginPath();
+    ctx.arc(dir * headR * 0.45, headY + headR * 0.02, headR * 0.13, 0, 7);
+    ctx.fill();
+    // nose hint
+    ctx.strokeStyle = 'rgba(120,80,50,0.45)';
+    ctx.lineWidth = Math.max(1, lw * 0.2);
+    ctx.beginPath();
+    ctx.moveTo(dir * headR * 0.78, headY + headR * 0.1);
+    ctx.lineTo(dir * headR * 0.92, headY + headR * 0.28);
+    ctx.stroke();
+  }
+  // guards wear a peaked cap
+  if (colors.cap) {
+    ctx.fillStyle = colors.cap;
+    ctx.beginPath();
+    ctx.arc(0, headY - headR * 0.15, headR * 1.02, Math.PI, Math.PI * 2);
+    ctx.closePath();
+    ctx.fill();
+    if (!backView) {
+      ctx.fillRect(dir > 0 ? 0 : -headR * 1.45, headY - headR * 0.3, headR * 1.45, headR * 0.22);
+    }
+    ctx.fillStyle = colors.belt;
+    ctx.fillRect(-headR * 0.18, headY - headR * 0.75, headR * 0.36, headR * 0.2);
+  }
 
   // carried gold
   if (a.carry) {
@@ -1003,8 +1068,18 @@ function drawFigure(a, colors) {
   ctx.restore();
 }
 
-const RUNNER_COLORS = { suit: '#e8eef7', dark: '#9fb0c6', accent: '#3fa7d6' };
-const GUARD_COLORS  = { suit: '#d9534a', dark: '#8f2f29', accent: '#f0a13a' };
+const RUNNER_COLORS = {
+  skin: '#e9bb8f', hair: '#6b4a2f',
+  shirt: '#e8eef7', shirtDark: '#aebccf',
+  pants: '#3a6ea5', pantsDark: '#2a5078',
+  shoes: '#26303e', belt: '#f2b632', cap: null,
+};
+const GUARD_COLORS = {
+  skin: '#dda878', hair: '#2e2622',
+  shirt: '#d9534a', shirtDark: '#9c352e',
+  pants: '#41332f', pantsDark: '#2e2320',
+  shoes: '#1b1512', belt: '#f0a13a', cap: '#37424f',
+};
 
 // --- frame ---
 function render() {
@@ -1146,7 +1221,7 @@ function showStart() {
     <div class="modal-sub">HD REMASTER &middot; ALL 150 ORIGINAL LEVELS &middot; 1983 CLASSIC</div>
     <div class="help-grid">
       <span class="k">← → ↑ ↓</span><span>Run, climb ladders, hang from ropes</span>
-      <span class="k">Z / X</span><span>Dig left / right through brick floors</span>
+      <span class="k">SPACE</span><span>Dig through the brick you're facing (Z/X: dig left/right)</span>
       <span class="k">P &nbsp; R &nbsp; M</span><span>Pause &middot; Restart level &middot; Sound on/off</span>
     </div>
     <div class="modal-sub" style="margin-top:1rem">
