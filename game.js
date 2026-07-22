@@ -480,13 +480,25 @@ function updateGuard(g, dt) {
     g.t -= dt;
     const h = holeAt(cx, cy);
     if (!h) { g.state = 'normal'; return; }   // hole already gone (death handled by hole close)
-    if (g.t <= 0) { g.state = 'exiting'; g.exitY = cy - 1; }
+    if (g.t <= 0) { g.state = 'exiting'; g.exitY = cy - 1; g.exitPhase = 'up'; }
     return;
   }
 
   if (g.state === 'exiting') {
-    // climb out of the hole to the fixed cell above it
     const ty = g.exitY;
+    if (g.exitPhase === 'side') {
+      // grace step: walk onto the floor beside the hole, immune to falling,
+      // so we don't drop straight back into it
+      const dx = g.exitTX - g.x;
+      g.dir = Math.sign(dx) || g.dir;
+      g.x += Math.sign(dx) * Math.min(Math.abs(dx), g.speed * dt);
+      if (Math.abs(g.x - g.exitTX) < 0.005) {
+        g.x = g.exitTX;
+        g.state = 'normal'; g.exitPhase = null; g.next = null;
+      }
+      return;
+    }
+    // climb up to the fixed cell above the hole
     if (g.y > ty + 0.99) {
       // still fully inside: wait until the landing cell is clear
       if (guardBlocked(cx, ty, g) || ty < 0 ||
@@ -496,10 +508,21 @@ function updateGuard(g, dt) {
     }
     g.y -= CLIMB_SPEED * 0.8 * dt;
     if (g.y <= ty) {
-      g.y = ty; g.state = 'normal'; g.next = null;
-      // step away from the hole so we don't instantly re-fall
-      const away = !guardBlocked(cx + 1, ty, g) ? 1 : (!guardBlocked(cx - 1, ty, g) ? -1 : 0);
-      if (away) g.next = [cx + away, ty];
+      g.y = ty;
+      // pick the exit side: toward the runner if that floor is open, else the other side
+      const sideFree = (s) => !guardBlocked(cx + s, ty, g) &&
+        !G.guards.some(o => o !== g && o.state === 'normal' &&
+          Math.round(o.x) === cx + s && Math.round(o.y) === ty);
+      const rdir = G.runner.x >= g.x ? 1 : -1;
+      const side = sideFree(rdir) ? rdir : (sideFree(-rdir) ? -rdir : 0);
+      if (side === 0) {
+        // boxed in on both sides: give up the grace step
+        g.state = 'normal'; g.exitPhase = null; g.next = null;
+      } else {
+        g.exitPhase = 'side';
+        g.exitTX = cx + side;
+        g.dir = side;
+      }
     }
     return;
   }
