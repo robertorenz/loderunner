@@ -72,6 +72,7 @@ function loadLevel(idx) {
     }
   }
   G.goldLeft = G.goldTotal;
+  G.terrainDirty = true;
   // classic pacing: each guard's speed drops as the guard count rises
   // (derived from the original's move-scheduling table)
   const GUARD_SPEED = [0.67, 0.67, 0.50, 0.44, 0.42, 0.40, 0.39, 0.38, 0.375, 0.37, 0.367, 0.364];
@@ -264,7 +265,7 @@ function postMoveRunner() {
     spawnSparkle(cx, cy, '#ffd257');
     Sfx.gold();
     if (G.goldLeft === 0) {
-      G.revealed = true; G.revealFlash = 1;
+      G.revealed = true; G.revealFlash = 1; G.terrainDirty = true;
       Sfx.reveal();
     }
   }
@@ -674,20 +675,20 @@ function spawnDebris(cx, cy, count = 12) {
       life: 0.5 + Math.random() * 0.3,
       maxLife: 0.7,
       size: 0.05 + Math.random() * 0.08,
-      color: Math.random() < 0.5 ? '#a5402f' : '#7c2d21',
+      color: ['#b24a33', '#8a3423', '#d0714f'][Math.floor(Math.random() * 3)],
     });
   }
 }
 function spawnSparkle(cx, cy, color) {
-  for (let i = 0; i < 10; i++) {
+  for (let i = 0; i < 16; i++) {
     const a = Math.random() * Math.PI * 2;
     const s = 1 + Math.random() * 2.5;
     G.particles.push({
       x: cx, y: cy,
       vx: Math.cos(a) * s, vy: Math.sin(a) * s - 1,
       life: 0.4 + Math.random() * 0.35, maxLife: 0.7,
-      size: 0.04 + Math.random() * 0.05,
-      color,
+      size: 0.05 + Math.random() * 0.06,
+      color, glow: true,
     });
   }
 }
@@ -764,226 +765,445 @@ const ctx = canvas.getContext('2d');
 let S = 40;          // tile size in CSS pixels
 let DPR = 1;
 
-const sprites = {};  // prerendered tiles
+const sprites = {};  // prerendered layers
+// actors are drawn into this scratch canvas first, then composited with an outline
+const figCanvas = document.createElement('canvas');
+const figCtx = figCanvas.getContext('2d');
 
 function resize() {
   const stage = document.getElementById('stage');
-  const availW = stage.clientWidth - 20, availH = stage.clientHeight - 20;
+  const availW = stage.clientWidth - 40, availH = stage.clientHeight - 40;
   S = Math.max(14, Math.floor(Math.min(availW / COLS, availH / ROWS)));
   DPR = window.devicePixelRatio || 1;
   canvas.style.width = COLS * S + 'px';
   canvas.style.height = ROWS * S + 'px';
   canvas.width = Math.round(COLS * S * DPR);
   canvas.height = Math.round(ROWS * S * DPR);
-  buildSprites();
+  figCanvas.width = figCanvas.height = Math.ceil(S * 3 * DPR);
+  buildBackground();
+  G.terrainDirty = true;
 }
 window.addEventListener('resize', resize);
 
-function makeTileCanvas(draw) {
-  const c = document.createElement('canvas');
-  c.width = c.height = Math.max(2, Math.round(S * DPR));
-  const g = c.getContext('2d');
-  g.scale(DPR, DPR);
-  draw(g, S);
-  return c;
+// ---- deterministic per-cell randomness, so textures don't shimmer between rebuilds ----
+function hashCell(x, y, salt) {
+  let h = Math.imul(x + 101, 374761393) ^ Math.imul(y + 211, 668265263) ^ Math.imul(salt + 7, 2246822519);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return (h ^ (h >>> 16)) >>> 0;
+}
+function cellRng(x, y, salt) {
+  let s = hashCell(x, y, salt) || 1;
+  return () => { s ^= s << 13; s ^= s >>> 17; s ^= s << 5; return (s >>> 0) / 4294967296; };
+}
+function rrect(g, x, y, w, h, r) {
+  g.beginPath();
+  if (g.roundRect) g.roundRect(x, y, w, h, r); else g.rect(x, y, w, h);
+}
+// solid ground as far as surface lighting is concerned
+function isGround(x, y) {
+  if (y < 0) return false;
+  const t = baseTile(x, y);
+  return t === T.BRICK || t === T.SOLID || t === T.TRAP;
 }
 
-function buildSprites() {
-  // --- brick ---
-  sprites.brick = makeTileCanvas((g, s) => {
-    const grad = g.createLinearGradient(0, 0, 0, s);
-    grad.addColorStop(0, '#b04a35');
-    grad.addColorStop(1, '#8c3526');
-    g.fillStyle = grad;
-    g.fillRect(0, 0, s, s);
-    // mortar
-    g.strokeStyle = 'rgba(30,12,8,0.85)';
-    g.lineWidth = Math.max(1, s * 0.045);
-    g.beginPath();
-    g.moveTo(0, s / 3); g.lineTo(s, s / 3);
-    g.moveTo(0, 2 * s / 3); g.lineTo(s, 2 * s / 3);
-    g.moveTo(s / 2, 0); g.lineTo(s / 2, s / 3);
-    g.moveTo(s / 4, s / 3); g.lineTo(s / 4, 2 * s / 3);
-    g.moveTo(3 * s / 4, s / 3); g.lineTo(3 * s / 4, 2 * s / 3);
-    g.moveTo(s / 2, 2 * s / 3); g.lineTo(s / 2, s);
-    g.stroke();
-    // top highlight
-    g.fillStyle = 'rgba(255,190,150,0.14)';
-    g.fillRect(0, 0, s, s * 0.08);
-    // bottom shade
-    g.fillStyle = 'rgba(0,0,0,0.22)';
-    g.fillRect(0, s * 0.94, s, s * 0.06);
-  });
+// ---- background: dim stone back wall, cool light from above ----
+function buildBackground() {
+  const c = sprites.bg || (sprites.bg = document.createElement('canvas'));
+  c.width = canvas.width; c.height = canvas.height;
+  const g = c.getContext('2d');
+  g.setTransform(DPR, 0, 0, DPR, 0, 0);
+  const w = COLS * S, h = ROWS * S;
+  const grad = g.createLinearGradient(0, 0, 0, h);
+  grad.addColorStop(0, '#17223a');
+  grad.addColorStop(0.55, '#0e1527');
+  grad.addColorStop(1, '#080c17');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, w, h);
 
-  // --- solid bedrock ---
-  sprites.solid = makeTileCanvas((g, s) => {
-    const grad = g.createLinearGradient(0, 0, s, s);
-    grad.addColorStop(0, '#454f63');
-    grad.addColorStop(1, '#2b3342');
-    g.fillStyle = grad;
-    g.fillRect(0, 0, s, s);
-    g.strokeStyle = 'rgba(150,170,200,0.18)';
-    g.lineWidth = Math.max(1, s * 0.05);
-    g.strokeRect(s * 0.06, s * 0.06, s * 0.88, s * 0.88);
-    g.fillStyle = 'rgba(0,0,0,0.25)';
-    g.fillRect(0, s * 0.9, s, s * 0.1);
-    g.fillStyle = 'rgba(255,255,255,0.07)';
-    g.fillRect(0, 0, s, s * 0.08);
-    // rivets
-    g.fillStyle = 'rgba(160,180,210,0.4)';
-    const rr = s * 0.035;
-    for (const [px, py] of [[0.16, 0.16], [0.84, 0.16], [0.16, 0.84], [0.84, 0.84]]) {
-      g.beginPath(); g.arc(px * s, py * s, rr, 0, 7); g.fill();
+  // large staggered wall blocks, barely-there contrast
+  const bw = S * 2, bh = S;
+  for (let r = 0; r < ROWS; r++) {
+    const off = (r % 2) * S;
+    for (let i = -1; i <= COLS / 2; i++) {
+      const rnd = cellRng(i, r, 5);
+      const x = i * bw + off, y = r * bh, gap = Math.max(1, S * 0.06);
+      rrect(g, x + gap / 2, y + gap / 2, bw - gap, bh - gap, S * 0.08);
+      g.fillStyle = `rgba(130,160,220,${0.025 + rnd() * 0.035})`;
+      g.fill();
+      g.fillStyle = 'rgba(170,200,255,0.035)';
+      g.fillRect(x + gap, y + gap / 2, bw - gap * 2, Math.max(1, S * 0.03));
+      g.fillStyle = 'rgba(0,0,0,0.12)';
+      g.fillRect(x + gap, y + bh - gap / 2 - Math.max(1, S * 0.04), bw - gap * 2, Math.max(1, S * 0.04));
+      if (rnd() < 0.25) {
+        // hairline crack
+        g.strokeStyle = 'rgba(0,0,0,0.18)';
+        g.lineWidth = Math.max(1, S * 0.02);
+        g.beginPath();
+        let cx = x + bw * (0.2 + rnd() * 0.6), cy = y + gap;
+        g.moveTo(cx, cy);
+        for (let k = 0; k < 3; k++) { cx += (rnd() - 0.5) * S * 0.5; cy += bh * 0.3; g.lineTo(cx, cy); }
+        g.stroke();
+      }
     }
-  });
+  }
 
-  // --- ladder ---
-  sprites.ladder = makeTileCanvas((g, s) => {
-    const rail = Math.max(2, s * 0.09);
-    g.lineCap = 'round';
-    g.strokeStyle = '#8ba3c4';
-    g.lineWidth = rail;
+  // soft light shafts falling from above
+  g.globalCompositeOperation = 'lighter';
+  const shafts = [[0.18, 0.9], [0.52, 1.3], [0.82, 0.8]];
+  for (const [fx, fw] of shafts) {
+    const sx = w * fx, sw = S * 3 * fw;
+    const lg = g.createLinearGradient(0, 0, 0, h * 0.95);
+    lg.addColorStop(0, 'rgba(110,160,255,0.07)');
+    lg.addColorStop(1, 'rgba(110,160,255,0)');
+    g.fillStyle = lg;
     g.beginPath();
-    g.moveTo(s * 0.22, 0); g.lineTo(s * 0.22, s);
-    g.moveTo(s * 0.78, 0); g.lineTo(s * 0.78, s);
-    g.stroke();
-    g.strokeStyle = '#a9bedb';
-    g.lineWidth = Math.max(2, s * 0.075);
-    g.beginPath();
-    for (let i = 0; i < 3; i++) {
-      const y = s * (0.18 + i * 0.33);
-      g.moveTo(s * 0.22, y); g.lineTo(s * 0.78, y);
-    }
-    g.stroke();
-    // subtle glow
-    g.strokeStyle = 'rgba(170,200,240,0.15)';
-    g.lineWidth = rail * 2;
-    g.beginPath();
-    g.moveTo(s * 0.22, 0); g.lineTo(s * 0.22, s);
-    g.moveTo(s * 0.78, 0); g.lineTo(s * 0.78, s);
-    g.stroke();
-  });
+    g.moveTo(sx - sw * 0.35, 0); g.lineTo(sx + sw * 0.35, 0);
+    g.lineTo(sx + sw * 0.35 + S * 5, h); g.lineTo(sx - sw * 0.35 + S * 3, h);
+    g.closePath();
+    g.fill();
+  }
+  const top = g.createRadialGradient(w / 2, -h * 0.25, 0, w / 2, -h * 0.25, h * 1.1);
+  top.addColorStop(0, 'rgba(90,140,230,0.14)');
+  top.addColorStop(1, 'rgba(90,140,230,0)');
+  g.fillStyle = top;
+  g.fillRect(0, 0, w, h);
+  g.globalCompositeOperation = 'source-over';
 
-  // --- rope ---
-  sprites.rope = makeTileCanvas((g, s) => {
-    g.strokeStyle = '#c9a86b';
-    g.lineWidth = Math.max(2, s * 0.07);
-    g.lineCap = 'round';
-    g.beginPath();
-    g.moveTo(0, s * 0.16);
-    g.quadraticCurveTo(s / 2, s * 0.24, s, s * 0.16);
-    g.stroke();
-    g.strokeStyle = 'rgba(60,40,15,0.5)';
-    g.lineWidth = Math.max(1, s * 0.02);
-    for (let i = 1; i < 6; i++) {
-      const x = (i / 6) * s;
-      const y = 0.16 * s + 0.08 * s * Math.sin(Math.PI * i / 6) - 0.03 * s;
-      g.beginPath();
-      g.moveTo(x - s * 0.03, y);
-      g.lineTo(x + s * 0.03, y + s * 0.09);
-      g.stroke();
-    }
-  });
+  // ground fog + vignette
+  const fog = g.createLinearGradient(0, h * 0.6, 0, h);
+  fog.addColorStop(0, 'rgba(3,5,10,0)');
+  fog.addColorStop(1, 'rgba(3,5,10,0.45)');
+  g.fillStyle = fog;
+  g.fillRect(0, 0, w, h);
+  const v = g.createRadialGradient(w / 2, h / 2, h * 0.45, w / 2, h / 2, h * 1.15);
+  v.addColorStop(0, 'rgba(0,0,0,0)');
+  v.addColorStop(1, 'rgba(0,0,0,0.5)');
+  g.fillStyle = v;
+  g.fillRect(0, 0, w, h);
+}
 
-  // --- background ---
-  sprites.bg = document.createElement('canvas');
-  sprites.bg.width = canvas.width; sprites.bg.height = canvas.height;
-  {
-    const g = sprites.bg.getContext('2d');
-    g.scale(DPR, DPR);
-    const w = COLS * S, h = ROWS * S;
-    const grad = g.createLinearGradient(0, 0, 0, h);
-    grad.addColorStop(0, '#101725');
-    grad.addColorStop(0.6, '#0c111c');
-    grad.addColorStop(1, '#080b12');
-    g.fillStyle = grad;
-    g.fillRect(0, 0, w, h);
-    // faint distant texture
-    for (let i = 0; i < 90; i++) {
-      const x = Math.random() * w, y = Math.random() * h;
-      g.fillStyle = `rgba(120,150,200,${0.015 + Math.random() * 0.03})`;
-      g.fillRect(x, y, 2, 2);
+// ---- terrain tiles (drawn at absolute cell positions) ----
+function drawBrick(g, x, y) {
+  const px = x * S, py = y * S, rnd = cellRng(x, y, 11);
+  g.fillStyle = '#2a120c';
+  g.fillRect(px, py, S, S);
+  const gap = Math.max(1, S * 0.045), ch = S / 3;
+  const courses = [[0, 0.5, 1], [0, 0.25, 0.75, 1], [0, 0.5, 1]];
+  const edge = Math.max(1, S * 0.028);
+  for (let r = 0; r < 3; r++) {
+    const xs = courses[r];
+    for (let i = 0; i < xs.length - 1; i++) {
+      const bx = px + xs[i] * S + gap / 2, by = py + r * ch + gap / 2;
+      const bw = (xs[i + 1] - xs[i]) * S - gap, bh = ch - gap;
+      const hue = 7 + rnd() * 10, sat = 48 + rnd() * 14, lit = 35 + rnd() * 10;
+      const gr = g.createLinearGradient(0, by, 0, by + bh);
+      gr.addColorStop(0, `hsl(${hue},${sat}%,${lit + 9}%)`);
+      gr.addColorStop(1, `hsl(${hue},${sat}%,${lit - 6}%)`);
+      g.fillStyle = gr;
+      rrect(g, bx, by, bw, bh, S * 0.035);
+      g.fill();
+      // bevel: lit top edge, shaded bottom edge
+      g.fillStyle = 'rgba(255,214,186,0.24)';
+      g.fillRect(bx + edge, by, bw - edge * 2, edge);
+      g.fillStyle = 'rgba(0,0,0,0.3)';
+      g.fillRect(bx + edge * 0.5, by + bh - edge, bw - edge, edge);
+      // grit
+      const sz = Math.max(1, S * 0.03);
+      for (let k = 0; k < 3; k++) {
+        g.fillStyle = rnd() < 0.55 ? 'rgba(40,10,5,0.28)' : 'rgba(255,225,205,0.14)';
+        g.fillRect(bx + rnd() * (bw - sz), by + edge + rnd() * (bh - sz - edge * 2), sz, sz);
+      }
+      if (rnd() < 0.2) {
+        // chipped corner
+        const cs = S * (0.05 + rnd() * 0.05), right = rnd() < 0.5;
+        const cx = right ? bx + bw : bx;
+        g.fillStyle = 'rgba(30,10,6,0.7)';
+        g.beginPath();
+        g.moveTo(cx, by); g.lineTo(cx + (right ? -cs : cs), by); g.lineTo(cx, by + cs);
+        g.closePath();
+        g.fill();
+      }
     }
-    // vignette
-    const v = g.createRadialGradient(w / 2, h / 2, h * 0.4, w / 2, h / 2, h * 1.05);
-    v.addColorStop(0, 'rgba(0,0,0,0)');
-    v.addColorStop(1, 'rgba(0,0,0,0.42)');
-    g.fillStyle = v;
-    g.fillRect(0, 0, w, h);
+  }
+  // exposed top surface catches the light
+  if (!isGround(x, y - 1)) {
+    const lg = g.createLinearGradient(0, py, 0, py + S * 0.18);
+    lg.addColorStop(0, 'rgba(255,196,150,0.32)');
+    lg.addColorStop(1, 'rgba(255,196,150,0)');
+    g.fillStyle = lg;
+    g.fillRect(px, py, S, S * 0.18);
+    g.fillStyle = 'rgba(255,230,200,0.6)';
+    g.fillRect(px, py, S, Math.max(1, S * 0.03));
+  }
+  if (!isGround(x, y + 1) && y + 1 < ROWS) {
+    g.fillStyle = 'rgba(0,0,0,0.3)';
+    g.fillRect(px, py + S * 0.9, S, S * 0.1);
   }
 }
 
-// --- gold (drawn live for pulse animation) ---
-function drawGold(x, y, t) {
+function drawSolid(g, x, y) {
+  const px = x * S, py = y * S, rnd = cellRng(x, y, 23);
+  const l = 29 + rnd() * 7;
+  const gr = g.createLinearGradient(px, py, px + S, py + S);
+  gr.addColorStop(0, `hsl(216,15%,${l + 7}%)`);
+  gr.addColorStop(1, `hsl(222,18%,${l - 8}%)`);
+  g.fillStyle = gr;
+  g.fillRect(px, py, S, S);
+  const b = S * 0.11;
+  g.fillStyle = 'rgba(225,235,255,0.17)';
+  g.beginPath();
+  g.moveTo(px, py); g.lineTo(px + S, py); g.lineTo(px + S - b, py + b);
+  g.lineTo(px + b, py + b); g.lineTo(px + b, py + S - b); g.lineTo(px, py + S);
+  g.closePath(); g.fill();
+  g.fillStyle = 'rgba(0,0,0,0.34)';
+  g.beginPath();
+  g.moveTo(px + S, py); g.lineTo(px + S, py + S); g.lineTo(px, py + S);
+  g.lineTo(px + b, py + S - b); g.lineTo(px + S - b, py + S - b); g.lineTo(px + S - b, py + b);
+  g.closePath(); g.fill();
+  // mineral flecks
+  const sz = Math.max(1, S * 0.028);
+  for (let k = 0; k < 7; k++) {
+    g.fillStyle = rnd() < 0.5 ? 'rgba(0,0,0,0.22)' : 'rgba(200,220,255,0.16)';
+    g.fillRect(px + b + rnd() * (S - 2 * b - sz), py + b + rnd() * (S - 2 * b - sz), sz, sz);
+  }
+  if (rnd() < 0.35) {
+    g.strokeStyle = 'rgba(8,12,20,0.55)';
+    g.lineWidth = Math.max(1, S * 0.025);
+    g.beginPath();
+    let cx = px + b + rnd() * (S - 2 * b), cy = py + b;
+    g.moveTo(cx, cy);
+    for (let k = 0; k < 3; k++) { cx += (rnd() - 0.5) * S * 0.3; cy += (S - 2 * b) / 3; g.lineTo(cx, cy); }
+    g.stroke();
+  }
+  g.strokeStyle = 'rgba(0,0,0,0.5)';
+  g.lineWidth = Math.max(1, S * 0.025);
+  g.strokeRect(px + 0.5, py + 0.5, S - 1, S - 1);
+  if (!isGround(x, y - 1)) {
+    g.fillStyle = 'rgba(210,228,255,0.45)';
+    g.fillRect(px, py, S, Math.max(1, S * 0.03));
+  }
+}
+
+function drawLadder(g, x, y) {
   const px = x * S, py = y * S;
-  const pulse = 0.75 + 0.25 * Math.sin(t * 3 + x * 1.7 + y);
+  const railW = Math.max(2, S * 0.1);
+  const lx = px + S * 0.17, rx = px + S * 0.83 - railW;
+  // rungs sit behind the rails
+  for (let i = 0; i < 3; i++) {
+    const ry = py + S * (0.18 + i * 0.33), rh = Math.max(2, S * 0.08);
+    const rg = g.createLinearGradient(0, ry - rh / 2, 0, ry + rh / 2);
+    rg.addColorStop(0, '#dbe5f2');
+    rg.addColorStop(0.5, '#9fb2cc');
+    rg.addColorStop(1, '#5c6d88');
+    g.fillStyle = rg;
+    g.fillRect(lx + railW * 0.5, ry - rh / 2, rx - lx, rh);
+  }
+  for (const x0 of [lx, rx]) {
+    const rg = g.createLinearGradient(x0, 0, x0 + railW, 0);
+    rg.addColorStop(0, '#4f5f7a');
+    rg.addColorStop(0.35, '#e2ebf7');
+    rg.addColorStop(0.7, '#8397b4');
+    rg.addColorStop(1, '#3d4a60');
+    g.fillStyle = rg;
+    g.fillRect(x0, py, railW, S);
+  }
+  // bolts where rungs meet rails
+  g.fillStyle = 'rgba(40,52,72,0.8)';
+  for (let i = 0; i < 3; i++) {
+    const ry = py + S * (0.18 + i * 0.33);
+    for (const x0 of [lx, rx]) {
+      g.beginPath(); g.arc(x0 + railW / 2, ry, railW * 0.18, 0, 7); g.fill();
+    }
+  }
+}
+
+function drawRope(g, x, y) {
+  const px = x * S, yy = y * S + S * 0.17;
+  const th = Math.max(2, S * 0.085);
+  const rg = g.createLinearGradient(0, yy - th / 2, 0, yy + th / 2);
+  rg.addColorStop(0, '#f0d9a4');
+  rg.addColorStop(0.5, '#c9a45f');
+  rg.addColorStop(1, '#7c5a2b');
+  g.fillStyle = rg;
+  g.fillRect(px, yy - th / 2, S, th);
+  // twisted strands
+  g.strokeStyle = 'rgba(70,44,14,0.6)';
+  g.lineWidth = Math.max(1, S * 0.022);
+  g.beginPath();
+  for (let i = 0; i < 6; i++) {
+    const x0 = px + (i / 6) * S;
+    g.moveTo(x0, yy - th / 2);
+    g.lineTo(x0 + S / 10, yy + th / 2);
+  }
+  g.stroke();
+  // rope ends get a knotted anchor where they meet a wall
+  for (const s of [-1, 1]) {
+    if (isGround(x + s, y)) {
+      const ax = s < 0 ? px + S * 0.04 : px + S * 0.96;
+      g.fillStyle = '#6d7c93';
+      g.beginPath(); g.arc(ax, yy, th * 0.75, 0, 7); g.fill();
+      g.fillStyle = 'rgba(255,255,255,0.35)';
+      g.beginPath(); g.arc(ax - th * 0.2, yy - th * 0.2, th * 0.25, 0, 7); g.fill();
+    }
+  }
+}
+
+// static terrain + background, rebuilt only when the level, size or hidden ladders change
+function buildTerrain() {
+  const tc = sprites.tc || (sprites.tc = document.createElement('canvas'));
+  tc.width = canvas.width; tc.height = canvas.height;
+  const g = tc.getContext('2d');
+  g.setTransform(DPR, 0, 0, DPR, 0, 0);
+  for (let y = 0; y < ROWS; y++) {
+    for (let x = 0; x < COLS; x++) {
+      const b = G.tiles[y][x];
+      if (b === T.BRICK || b === T.TRAP) drawBrick(g, x, y);
+      else if (b === T.SOLID) drawSolid(g, x, y);
+      else if (b === T.LADDER || (b === T.HLADDER && G.revealed)) drawLadder(g, x, y);
+      else if (b === T.ROPE) drawRope(g, x, y);
+    }
+  }
+  const L = sprites.terrain || (sprites.terrain = document.createElement('canvas'));
+  L.width = canvas.width; L.height = canvas.height;
+  const lg = L.getContext('2d');
+  lg.drawImage(sprites.bg, 0, 0);
+  // everything casts a soft shadow onto the back wall
+  lg.save();
+  lg.shadowColor = 'rgba(0,0,0,0.62)';
+  lg.shadowBlur = S * 0.35 * DPR;
+  lg.shadowOffsetX = S * 0.1 * DPR;
+  lg.shadowOffsetY = S * 0.16 * DPR;
+  lg.drawImage(tc, 0, 0);
+  lg.restore();
+  G.terrainDirty = false;
+}
+
+// ---- ambient dust drifting through the light (stateless: a function of time) ----
+const MOTES = Array.from({ length: 46 }, (_, i) => {
+  const r = cellRng(i, 3, 91);
+  return { x: r() * COLS, y: r() * ROWS, vx: (r() - 0.5) * 0.25, vy: 0.08 + r() * 0.18,
+           sz: 0.02 + r() * 0.035, ph: r() * 6.28, a: 0.15 + r() * 0.3 };
+});
+function drawMotes(t) {
   ctx.save();
-  ctx.translate(px + S / 2, py + S * 0.68);
-  // glow
-  const glow = ctx.createRadialGradient(0, 0, 0, 0, 0, S * 0.55);
-  glow.addColorStop(0, `rgba(255,210,87,${0.28 * pulse})`);
-  glow.addColorStop(1, 'rgba(255,210,87,0)');
-  ctx.fillStyle = glow;
-  ctx.fillRect(-S * 0.6, -S * 0.6, S * 1.2, S * 1.2);
-  // ingot stack
-  const ing = (w, h, yy) => {
-    const grad = ctx.createLinearGradient(0, yy - h, 0, yy);
-    grad.addColorStop(0, '#ffe38a');
-    grad.addColorStop(0.5, '#f2b632');
-    grad.addColorStop(1, '#b57e12');
-    ctx.fillStyle = grad;
+  ctx.globalCompositeOperation = 'lighter';
+  for (const m of MOTES) {
+    const x = ((m.x + t * m.vx + Math.sin(t * 0.7 + m.ph) * 0.4) % COLS + COLS) % COLS;
+    const y = ((m.y - t * m.vy) % ROWS + ROWS) % ROWS;
+    const a = m.a * (0.6 + 0.4 * Math.sin(t * 1.3 + m.ph));
+    ctx.fillStyle = `rgba(190,215,255,${a})`;
     ctx.beginPath();
-    ctx.moveTo(-w / 2, yy);
-    ctx.lineTo(-w / 2 + h * 0.35, yy - h);
-    ctx.lineTo(w / 2 - h * 0.35, yy - h);
-    ctx.lineTo(w / 2, yy);
-    ctx.closePath();
+    ctx.arc(x * S, y * S, Math.max(0.8, m.sz * S), 0, 7);
     ctx.fill();
-    ctx.strokeStyle = 'rgba(90,60,0,0.55)';
-    ctx.lineWidth = Math.max(1, S * 0.02);
-    ctx.stroke();
-  };
-  ing(S * 0.62, S * 0.2, 0);
-  ing(S * 0.44, S * 0.19, -S * 0.19);
-  // sparkle
-  const sa = t * 2.2 + x * 3 + y * 5;
-  const sx = Math.cos(sa) * S * 0.12, sy = -S * 0.25 + Math.sin(sa * 0.7) * S * 0.06;
-  ctx.fillStyle = `rgba(255,255,255,${0.5 + 0.5 * Math.sin(t * 5 + x)})`;
-  ctx.beginPath();
-  const r = S * 0.045;
-  ctx.moveTo(sx, sy - r * 2); ctx.lineTo(sx + r * 0.6, sy - r * 0.6);
-  ctx.lineTo(sx + r * 2, sy); ctx.lineTo(sx + r * 0.6, sy + r * 0.6);
-  ctx.lineTo(sx, sy + r * 2); ctx.lineTo(sx - r * 0.6, sy + r * 0.6);
-  ctx.lineTo(sx - r * 2, sy); ctx.lineTo(sx - r * 0.6, sy - r * 0.6);
-  ctx.closePath();
-  ctx.fill();
+  }
   ctx.restore();
 }
 
-// --- humanoid figure (runner + guards), vector-drawn, smoothly animated ---
+// --- gold (drawn live: gentle bob, glow and a traveling glint) ---
+function drawGold(x, y, t) {
+  const pulse = 0.75 + 0.25 * Math.sin(t * 3 + x * 1.7 + y);
+  const bob = Math.sin(t * 2.2 + x * 0.9 + y * 1.3) * S * 0.025;
+  const cx = x * S + S / 2, base = y * S + S * 0.93 + bob;
+  ctx.save();
+  // bloom
+  ctx.globalCompositeOperation = 'lighter';
+  const glow = ctx.createRadialGradient(cx, base - S * 0.22, 0, cx, base - S * 0.22, S * 0.8);
+  glow.addColorStop(0, `rgba(255,200,80,${0.3 * pulse})`);
+  glow.addColorStop(1, 'rgba(255,200,80,0)');
+  ctx.fillStyle = glow;
+  ctx.fillRect(cx - S, base - S * 1.1, S * 2, S * 1.4);
+  ctx.globalCompositeOperation = 'source-over';
+  // contact shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.35)';
+  ctx.beginPath();
+  ctx.ellipse(cx, y * S + S * 0.96, S * 0.36, S * 0.05, 0, 0, 7);
+  ctx.fill();
+
+  const iw = S * 0.34, ih = S * 0.17;
+  const ingot = (x0, yb) => {
+    const top = iw * 0.62;
+    const grad = ctx.createLinearGradient(0, yb - ih, 0, yb);
+    grad.addColorStop(0, '#fff3c4');
+    grad.addColorStop(0.35, '#ffd257');
+    grad.addColorStop(0.75, '#e0a21f');
+    grad.addColorStop(1, '#9a650c');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.moveTo(x0 - iw / 2, yb);
+    ctx.lineTo(x0 - top / 2, yb - ih);
+    ctx.lineTo(x0 + top / 2, yb - ih);
+    ctx.lineTo(x0 + iw / 2, yb);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(80,48,0,0.75)';
+    ctx.lineWidth = Math.max(1, S * 0.02);
+    ctx.stroke();
+    // polished top face
+    ctx.fillStyle = 'rgba(255,252,225,0.75)';
+    ctx.fillRect(x0 - top / 2 + 1, yb - ih, top - 2, Math.max(1, ih * 0.14));
+    // diagonal specular stripe
+    ctx.save();
+    ctx.clip();
+    ctx.fillStyle = 'rgba(255,255,255,0.28)';
+    ctx.beginPath();
+    ctx.moveTo(x0 - iw * 0.18, yb); ctx.lineTo(x0 - iw * 0.02, yb - ih);
+    ctx.lineTo(x0 + iw * 0.08, yb - ih); ctx.lineTo(x0 - iw * 0.08, yb);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  };
+  ingot(cx - iw * 0.52, base);
+  ingot(cx + iw * 0.52, base);
+  ingot(cx, base - ih);
+
+  // glint: a four-point flare that sweeps across now and then
+  const ph = (t * 0.55 + (hashCell(x, y, 3) % 1000) / 1000) % 1;
+  if (ph < 0.3) {
+    const k = Math.sin(ph / 0.3 * Math.PI);
+    const gx = cx - iw * 0.6 + (ph / 0.3) * iw * 1.2, gy = base - ih * 1.55;
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.fillStyle = `rgba(255,255,240,${0.9 * k})`;
+    const r = S * 0.2 * k, n = r * 0.16;
+    ctx.beginPath();
+    ctx.moveTo(gx, gy - r); ctx.lineTo(gx + n, gy - n); ctx.lineTo(gx + r, gy);
+    ctx.lineTo(gx + n, gy + n); ctx.lineTo(gx, gy + r); ctx.lineTo(gx - n, gy + n);
+    ctx.lineTo(gx - r, gy); ctx.lineTo(gx - n, gy - n);
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+// --- humanoid figure (runner + guards): jointed skeleton with shaded, volumetric limbs ---
+// Drawn into figCtx (see drawActor). Legs and arms are two-bone chains (thigh/shin,
+// upper arm/forearm); the run cycle is driven by distance traveled so feet don't slide.
 function drawFigure(a, colors) {
+  const ctx = figCtx;
   const px = a.x * S + S / 2;
   const py = a.y * S + S / 2;
-  const h = S * 0.82;                     // figure height
-  const lw = Math.max(2, S * 0.085);      // limb width
-  const ph = a.phase;
+  const h = S * 0.95;                     // figure height
   const dir = a.dir || 1;
+  const ph = a.phase;
 
   let pose = 'stand';
+  const cxr = Math.round(a.x), cyr = Math.round(a.y);
   if (a === G.runner && G.state === 'dying') pose = 'dying';
   else if (a.digT > 0) pose = 'dig';
   else if (a.state === 'trapped') pose = 'trapped';
   else if (a.state === 'spawning') pose = 'spawn';
   else if (a.falling) pose = 'fall';
   else {
-    const cx = Math.round(a.x), cy = Math.round(a.y);
-    const onRope = ropeAt(cx, cy) && Math.abs(a.y - cy) < 0.05;
-    const onLadder = ladderAt(cx, cy) && Math.abs(a.y - cy) > 0.02;
-    const movingX = a.guard ? (a.next && a.next[0] !== cx) : (Input.left || Input.right);
-    const movingY = a.guard ? (a.next && a.next[1] !== cy) : (Input.up || Input.down);
-    if (onRope) pose = 'rope';
-    else if ((ladderAt(cx, cy) || ladderAt(cx, cy + 1)) && movingY) pose = 'climb';
-    else if (movingX) pose = 'run';
+    const onRope = ropeAt(cxr, cyr) && Math.abs(a.y - cyr) < 0.05;
+    const offGrid = Math.abs(a.y - cyr) > 0.02;
+    const movingX = a.guard ? (a.next && a.next[0] !== cxr) || a.state === 'exiting' : (Input.left || Input.right);
+    // on a ladder the figure stays in the climbing pose for the whole trip,
+    // including pauses mid-ladder; only a floor underfoot turns it back around
+    const onLadderBody = ladderAt(cxr, Math.floor(a.y)) || ladderAt(cxr, Math.ceil(a.y));
+    const floorBelow = cyr + 1 >= ROWS || solidAt(cxr, cyr + 1);
+    const climbing = onLadderBody && (offGrid || (ladderAt(cxr, cyr) && !floorBelow));
+    if (onRope) pose = movingX ? 'ropeMove' : 'rope';
+    else if (movingX && !offGrid) pose = 'run';
+    else if (climbing) pose = 'climb';
   }
 
   ctx.save();
@@ -993,347 +1213,529 @@ function drawFigure(a, colors) {
     ctx.globalAlpha = Math.max(0, 1 - G.stateT / DIE_TIME);
     ctx.translate(0, -G.stateT * S * 0.6);
   }
-
-  // ground shadow
-  if (pose !== 'fall' && pose !== 'rope' && pose !== 'dying') {
-    ctx.fillStyle = 'rgba(0,0,0,0.3)';
-    ctx.beginPath();
-    ctx.ellipse(0, h * 0.52, S * 0.24, S * 0.055, 0, 0, 7);
-    ctx.fill();
-  }
-
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
 
-  const headR = h * 0.14;
-  let headY = -h * 0.33;
-  let hipY = h * 0.08;
-  let neckY = headY + headR * 0.9;
-  let lean = 0;
+  // skeleton proportions
+  const TH = h * 0.24, SH = h * 0.235;    // thigh, shin
+  const UA = h * 0.165, FA = h * 0.16;    // upper arm, forearm
+  const TORSO = h * 0.27, headR = h * 0.125;
+  const limbW = h * 0.12;
 
-  // limb endpoints (relative)
-  let armL, armR, legL, legR;
-  const swing = Math.sin(ph);
-  const swing2 = Math.sin(ph + Math.PI);
+  // forward kinematics: angles are measured from straight down, positive = toward facing
+  const legFK = (hx, hy, th, kn) => {
+    const kx = hx + Math.sin(th) * dir * TH, ky = hy + Math.cos(th) * TH;
+    const sa = th - kn;
+    return [[hx, hy], [kx, ky], [kx + Math.sin(sa) * dir * SH, ky + Math.cos(sa) * SH]];
+  };
+  const armFK = (sx, sy, ua, e) => {
+    const ex = sx + Math.sin(ua) * dir * UA, ey = sy + Math.cos(ua) * UA;
+    const fa = ua + e;
+    return [[sx, sy], [ex, ey], [ex + Math.sin(fa) * dir * FA, ey + Math.cos(fa) * FA]];
+  };
+  // two-bone IK: reach a target, bending the middle joint to side s (+1 clockwise)
+  const ik = (rx, ry, tx, ty, l1, l2, s) => {
+    let dx = tx - rx, dy = ty - ry, d = Math.hypot(dx, dy);
+    const maxd = (l1 + l2) * 0.999;
+    if (d > maxd) { tx = rx + dx / d * maxd; ty = ry + dy / d * maxd; d = maxd; }
+    d = Math.max(d, 1e-3);
+    const c = (l1 * l1 + d * d - l2 * l2) / (2 * l1 * d);
+    const ang = Math.acos(Math.max(-1, Math.min(1, c)));
+    const base = Math.atan2(ty - ry, tx - rx);
+    return [[rx, ry], [rx + Math.cos(base + s * ang) * l1, ry + Math.sin(base + s * ang) * l1], [tx, ty]];
+  };
+
+  let hipX = 0, hipY = h * 0.02, lean = 0.03;
+  let legNear, legFar, armNear, armFar;
+  let back = false;              // climbing shows the character's back
+  let shadowScale = 1;
+
+  const shoulderOf = () => [hipX + Math.sin(lean) * dir * TORSO, hipY - Math.cos(lean) * TORSO];
 
   switch (pose) {
     case 'run': {
-      lean = dir * 0.14;
-      const la = swing * 0.85, lb = swing2 * 0.85;
-      legL = [Math.sin(la) * h * 0.3, hipY + Math.cos(la) * h * 0.42];
-      legR = [Math.sin(lb) * h * 0.3, hipY + Math.cos(lb) * h * 0.42];
-      armL = [Math.sin(lb) * h * 0.26, neckY + h * 0.3 + Math.abs(Math.cos(lb)) * h * 0.05];
-      armR = [Math.sin(la) * h * 0.26, neckY + h * 0.3 + Math.abs(Math.cos(la)) * h * 0.05];
+      // one full stride every 1.7 tiles, phase tied to position
+      const p = a.x * dir * (Math.PI * 2 / 1.7);
+      const legAng = (q) => {
+        const c = Math.cos(q);
+        return [0.12 + 0.72 * Math.sin(q),
+                0.25 + 1.35 * Math.pow(Math.max(0, c), 1.3) + 0.3 * Math.max(0, -c)];
+      };
+      // body is lowest at mid-stance, highest in flight
+      hipY = h * 0.012 + h * 0.035 * Math.abs(Math.cos(p));
+      lean = 0.2;
+      shadowScale = 0.8 + 0.2 * Math.abs(Math.cos(p));
+      const [n1, n2] = legAng(p), [f1, f2] = legAng(p + Math.PI);
+      legNear = legFK(hipX, hipY, n1, n2);
+      legFar = legFK(hipX, hipY, f1, f2);
+      const [sx, sy] = shoulderOf();
+      // arms counter-swing: the near arm follows the far leg
+      const arm = (q) => [0.85 * Math.sin(q) - 0.1, 1.45 + 0.4 * Math.sin(q)];
+      const [an1, an2] = arm(p + Math.PI), [af1, af2] = arm(p);
+      armNear = armFK(sx, sy, an1, an2);
+      armFar = armFK(sx - dir * h * 0.02, sy, af1, af2);
       break;
     }
     case 'climb': {
-      const c = Math.sin(ph * 1.2);
-      armL = [-h * 0.18, headY - h * 0.14 + c * h * 0.08];
-      armR = [h * 0.18, headY - h * 0.14 - c * h * 0.08];
-      legL = [-h * 0.12, hipY + h * 0.38 - c * h * 0.1];
-      legR = [h * 0.12, hipY + h * 0.38 + c * h * 0.1];
+      back = true;
+      // one full hand-foot cycle every two rungs, tied to height climbed
+      const c = Math.sin(a.y * Math.PI * 3);
+      hipY = h * 0.0;
+      const shY = hipY - TORSO;
+      const hy = shY - h * 0.15;
+      // diagonal pairs move together: left hand with right foot, and vice versa;
+      // elbows and knees point outward
+      armFar = ik(-h * 0.1, shY, -h * 0.18, hy - c * h * 0.13, UA, FA, -1);
+      armNear = ik(h * 0.1, shY, h * 0.18, hy + c * h * 0.13, UA, FA, 1);
+      legFar = ik(-h * 0.055, hipY, -h * 0.1, h * 0.47 - Math.max(0, c) * h * 0.13, TH, SH, 1);
+      legNear = ik(h * 0.055, hipY, h * 0.1, h * 0.47 - Math.max(0, -c) * h * 0.13, TH, SH, -1);
+      shadowScale = 0;
       break;
     }
-    case 'rope': {
-      headY += h * 0.12; neckY += h * 0.12; hipY += h * 0.1;
-      const ropeY = headY - h * 0.2;
-      const cx0 = Math.round(a.x);
-      const moving = a.guard ? (a.next && a.next[0] !== cx0) : (Input.left || Input.right);
-      if (moving) {
-        // hand over hand: the cycle is tied to distance traveled, so each
-        // hand releases, swings past the other, and re-grips the rope
+    case 'rope':
+    case 'ropeMove': {
+      const ropeY = -S * 0.33;
+      hipY = h * 0.18; lean = 0;
+      const shY = hipY - TORSO;
+      let hn, hf;
+      if (pose === 'ropeMove') {
+        // hand over hand: each hand releases, swings past the other, and re-grips
         const t = a.x * Math.PI * 2.4;
         const s1 = Math.sin(t), s2 = Math.sin(t + Math.PI);
-        armL = [s1 * h * 0.26, ropeY + (1 - Math.abs(s1)) * h * 0.10];
-        armR = [s2 * h * 0.26, ropeY + (1 - Math.abs(s2)) * h * 0.10];
-        const sway = Math.sin(t) * 0.05;
-        legL = [(-0.08 - sway) * h - dir * h * 0.06, hipY + h * 0.34];
-        legR = [(0.08 - sway) * h - dir * h * 0.06, hipY + h * 0.36];
+        hn = [s1 * h * 0.24, ropeY + (1 - Math.abs(s1)) * h * 0.09];
+        hf = [s2 * h * 0.24, ropeY + (1 - Math.abs(s2)) * h * 0.09];
+        const sway = Math.sin(t) * 0.12;
+        legNear = legFK(hipX, hipY, 0.1 - sway, 0.7);
+        legFar = legFK(hipX, hipY, 0.35 - sway, 0.9);
       } else {
         const c = Math.sin(ph * 0.8) * 0.06;
-        armL = [-h * 0.14, ropeY];
-        armR = [h * 0.14, ropeY];
-        legL = [(-0.1 + c) * h, hipY + h * 0.36];
-        legR = [(0.1 + c) * h, hipY + h * 0.36];
+        hn = [dir * h * 0.13, ropeY];
+        hf = [-dir * h * 0.1, ropeY];
+        legNear = legFK(hipX, hipY, 0.25 + c, 0.6);
+        legFar = legFK(hipX, hipY, 0.05 + c, 0.55);
       }
+      // elbows point back and down while hanging
+      armNear = ik(dir * h * 0.02, shY, hn[0], hn[1], UA, FA, -dir);
+      armFar = ik(-dir * h * 0.02, shY, hf[0], hf[1], UA, FA, -dir);
+      shadowScale = 0;
       break;
     }
     case 'fall': {
-      const c = Math.sin(ph * 2) * 0.08;
-      armL = [-h * 0.3, neckY - h * 0.1 + c * h];
-      armR = [h * 0.3, neckY - h * 0.1 - c * h];
-      legL = [-h * 0.18 + c * h, hipY + h * 0.36];
-      legR = [h * 0.18 - c * h, hipY + h * 0.36];
+      const c = Math.sin(ph * 2) * 0.25;
+      lean = -0.08;
+      legNear = legFK(hipX, hipY, 0.55 + c, 1.2);
+      legFar = legFK(hipX, hipY, -0.15 - c, 0.9);
+      const [sx, sy] = shoulderOf();
+      armNear = armFK(sx, sy, Math.PI - 0.6 + c, 0.35);
+      armFar = armFK(sx, sy, Math.PI + 0.5 - c, -0.3);
+      shadowScale = 0;
       break;
     }
     case 'dig': {
       // chopping swing driven by dig progress
       const p = 1 - Math.max(0, a.digT || 0) / DIG_TIME;
-      const bob = Math.sin(p * Math.PI * 4) * h * 0.06;
-      lean = dir * (0.26 + bob / h);
-      hipY += h * 0.06;
-      armL = [dir * h * 0.42, hipY + h * 0.16 + bob];
-      armR = [dir * h * 0.30, hipY + h * 0.24 + bob];
-      legL = [-dir * h * 0.2, hipY + h * 0.36];
-      legR = [dir * h * 0.16, hipY + h * 0.4];
+      const bob = Math.sin(p * Math.PI * 4) * h * 0.05;
+      lean = 0.5 + bob / h;
+      hipY = h * 0.08;
+      legNear = legFK(hipX, hipY, 0.55, 1.05);
+      legFar = legFK(hipX, hipY, -0.35, 0.45);
+      const [sx, sy] = shoulderOf();
+      armNear = ik(sx, sy, dir * h * 0.4, hipY + h * 0.12 + bob, UA, FA, dir);
+      armFar = ik(sx - dir * h * 0.02, sy, dir * h * 0.22, hipY - h * 0.04 + bob, UA, FA, dir);
       break;
     }
     case 'trapped': {
-      headY += h * 0.28; neckY += h * 0.28; hipY += h * 0.3;
-      const c = Math.sin(ph * 3) * h * 0.1;
-      armL = [-h * 0.26, headY - h * 0.18 + c];
-      armR = [h * 0.26, headY - h * 0.18 - c];
-      legL = [-h * 0.08, hipY + h * 0.2];
-      legR = [h * 0.08, hipY + h * 0.2];
+      hipY = h * 0.32; lean = 0;
+      const c = Math.sin(ph * 3) * h * 0.08;
+      const shY = hipY - TORSO;
+      armNear = ik(dir * h * 0.04, shY, dir * h * 0.24, shY - h * 0.24 + c, UA, FA, dir);
+      armFar = ik(-dir * h * 0.04, shY, -dir * h * 0.2, shY - h * 0.24 - c, UA, FA, -dir);
+      legNear = legFK(hipX, hipY, 0.3, 0.6);
+      legFar = legFK(hipX, hipY, -0.2, 0.5);
+      shadowScale = 0;
       break;
     }
-    default: { // stand / spawn / dying
-      armL = [-h * 0.14, neckY + h * 0.32];
-      armR = [h * 0.14, neckY + h * 0.32];
-      legL = [-h * 0.11, hipY + h * 0.42];
-      legR = [h * 0.11, hipY + h * 0.42];
+    default: { // stand / spawn / dying: relaxed stance, gentle breathing
+      const br = Math.sin(ph * 0.35) * h * 0.006;
+      hipY = h * 0.02 + br;
+      lean = 0.03;
+      legNear = legFK(hipX, hipY, 0.07, 0.1);
+      legFar = legFK(hipX, hipY, -0.07, 0.06);
+      const [sx, sy] = shoulderOf();
+      armNear = armFK(sx, sy + br, 0.1, 0.22);
+      armFar = armFK(sx - dir * h * 0.02, sy + br, -0.08, 0.3);
     }
   }
 
-  ctx.rotate(lean);
-
-  const shoulderY = neckY + h * 0.05;
-  const backView = pose === 'climb';   // climbing a ladder shows the character's back
-
-  const limbPath = (x0, y0, x1, y1, bowSign) => {
-    // limbs bend softly at an implied joint (knee/elbow)
-    const mx = (x0 + x1) / 2, my = (y0 + y1) / 2;
-    const dx = x1 - x0, dy = y1 - y0;
-    const len = Math.hypot(dx, dy) || 1;
-    const bow = h * 0.055;
-    const jx = mx + (-dy / len) * bow * bowSign;
-    const jy = my + (dx / len) * bow * 0.35;
+  // contact shadow
+  if (shadowScale > 0 && pose !== 'dying') {
+    ctx.fillStyle = `rgba(0,0,0,${0.32 * shadowScale})`;
     ctx.beginPath();
-    ctx.moveTo(x0, y0);
-    ctx.quadraticCurveTo(jx, jy, x1, y1);
-    ctx.stroke();
-  };
-
-  const drawLeg = ([fx, fy], pants, shade) => {
-    ctx.strokeStyle = shade ? colors.pantsDark : colors.pants;
-    ctx.lineWidth = lw * 1.05;
-    limbPath(0, hipY, fx, fy - h * 0.03, fx >= 0 ? 1 : -1);
-    // shoe: flat oval oriented toward facing direction
-    ctx.fillStyle = colors.shoes;
-    ctx.beginPath();
-    ctx.ellipse(fx + dir * h * 0.035, fy, h * 0.075, h * 0.038, 0, 0, 7);
+    ctx.ellipse(0, h * 0.515, S * 0.26 * shadowScale, S * 0.055, 0, 0, 7);
     ctx.fill();
-  };
-
-  const drawArm = ([hx, hy], shade) => {
-    ctx.strokeStyle = shade ? colors.shirtDark : colors.shirt;
-    ctx.lineWidth = lw * 0.85;
-    limbPath(0, shoulderY, hx, hy, hx >= 0 ? 1 : -1);
-    // hand
-    ctx.fillStyle = colors.skin;
-    ctx.beginPath();
-    ctx.arc(hx, hy, lw * 0.5, 0, 7);
-    ctx.fill();
-  };
-
-  // back limbs (shaded)
-  drawLeg(legR, colors.pants, true);
-  drawArm(armR, true);
-
-  // torso: shirt tapering from shoulders to hips
-  const shW = h * 0.155, hipW = h * 0.115;
-  const grad = ctx.createLinearGradient(-shW, 0, shW, 0);
-  grad.addColorStop(0, colors.shirtDark);
-  grad.addColorStop(0.45, colors.shirt);
-  grad.addColorStop(1, colors.shirt);
-  ctx.fillStyle = grad;
-  ctx.beginPath();
-  ctx.moveTo(-shW, shoulderY);
-  ctx.quadraticCurveTo(0, shoulderY - h * 0.045, shW, shoulderY);
-  ctx.lineTo(hipW, hipY + h * 0.02);
-  ctx.lineTo(-hipW, hipY + h * 0.02);
-  ctx.closePath();
-  ctx.fill();
-  // belt
-  ctx.fillStyle = colors.belt;
-  ctx.fillRect(-hipW, hipY - h * 0.015, hipW * 2, h * 0.045);
-
-  // front limbs
-  drawLeg(legL, colors.pants, false);
-  drawArm(armL, false);
-
-  // neck + head
-  ctx.fillStyle = colors.skin;
-  ctx.fillRect(-lw * 0.4, headY + headR * 0.6, lw * 0.8, neckY - headY - headR * 0.4);
-  ctx.beginPath();
-  ctx.arc(0, headY, headR, 0, 7);
-  ctx.fill();
-  // hair: covers the top of the head (all of it in back view)
-  ctx.fillStyle = colors.hair;
-  ctx.beginPath();
-  if (backView) {
-    ctx.arc(0, headY, headR, 0, 7);
-  } else {
-    ctx.arc(0, headY, headR, Math.PI * 1.02, Math.PI * 1.98);
-    ctx.quadraticCurveTo(dir * headR * 0.9, headY - headR * 0.35, dir * headR * 0.95, headY - headR * 0.1);
-    ctx.quadraticCurveTo(0, headY - headR * 0.35, -dir * headR * 0.98, headY - headR * 0.05);
   }
-  ctx.closePath();
-  ctx.fill();
-  if (!backView) {
-    // eye + simple profile shading on the facing side
-    ctx.fillStyle = '#1c2430';
-    ctx.beginPath();
-    ctx.arc(dir * headR * 0.45, headY + headR * 0.02, headR * 0.13, 0, 7);
+
+  // ---- volumetric drawing helpers ----
+  // a cylinder-ish segment: dark base, mid tone, and a thin highlight toward the light (upper-left/front)
+  const seg = (x0, y0, x1, y1, w, dark, mid, light) => {
+    ctx.strokeStyle = dark; ctx.lineWidth = w;
+    ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
+    const o = w * 0.1;
+    ctx.strokeStyle = mid; ctx.lineWidth = w * 0.7;
+    ctx.beginPath(); ctx.moveTo(x0 - o, y0 - o); ctx.lineTo(x1 - o, y1 - o); ctx.stroke();
+    if (light) {
+      const o2 = w * 0.2;
+      ctx.strokeStyle = light; ctx.lineWidth = w * 0.22;
+      ctx.beginPath(); ctx.moveTo(x0 - o2, y0 - o2); ctx.lineTo(x1 - o2, y1 - o2); ctx.stroke();
+    }
+  };
+  const shade = (pts, w) => {   // far-side limbs sit in shadow
+    ctx.strokeStyle = 'rgba(4,8,18,0.34)'; ctx.lineWidth = w;
+    ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]);
+    ctx.lineTo(pts[1][0], pts[1][1]); ctx.lineTo(pts[2][0], pts[2][1]); ctx.stroke();
+  };
+  const drawShoe = (leg, far) => {
+    const [kx, ky] = leg[1], [fx, fy] = leg[2];
+    ctx.save();
+    ctx.translate(fx, fy);
+    if (back) {
+      ctx.fillStyle = far ? colors.shoes : colors.shoesLight;
+      ctx.beginPath(); ctx.ellipse(0, h * 0.01, h * 0.05, h * 0.035, 0, 0, 7); ctx.fill();
+      ctx.restore();
+      return;
+    }
+    ctx.scale(dir, 1);
+    // toe points down when the shin trails behind the knee
+    const shinBack = Math.atan2(-(fx - kx) * dir, fy - ky);
+    ctx.rotate(Math.max(0, Math.min(0.9, shinBack * 0.8)));
+    const sg = ctx.createLinearGradient(0, -h * 0.04, 0, h * 0.03);
+    sg.addColorStop(0, colors.shoesLight);
+    sg.addColorStop(1, colors.shoes);
+    ctx.fillStyle = sg;
+    rrect(ctx, -h * 0.045, -h * 0.04, h * 0.15, h * 0.065, h * 0.03);
     ctx.fill();
-    // nose hint
-    ctx.strokeStyle = 'rgba(120,80,50,0.45)';
-    ctx.lineWidth = Math.max(1, lw * 0.2);
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(-h * 0.04, h * 0.014, h * 0.14, h * 0.012);
+    if (far) { ctx.fillStyle = 'rgba(4,8,18,0.3)'; rrect(ctx, -h * 0.045, -h * 0.04, h * 0.15, h * 0.065, h * 0.03); ctx.fill(); }
+    ctx.restore();
+  };
+  const drawLeg = (leg, far) => {
+    const [[hx, hy], [kx, ky], [fx, fy]] = leg;
+    seg(hx, hy, kx, ky, limbW * 1.1, colors.pantsDark, colors.pants, colors.pantsLight);
+    seg(kx, ky, fx, fy, limbW, colors.pantsDark, colors.pants, colors.pantsLight);
+    if (far) shade(leg, limbW * 1.1);
+    drawShoe(leg, far);
+  };
+  const drawHand = (x, y) => {
+    const r = h * 0.042;
+    const hg = ctx.createRadialGradient(x - r * 0.3, y - r * 0.3, 0, x, y, r);
+    hg.addColorStop(0, colors.skinLight);
+    hg.addColorStop(1, colors.skinDark);
+    ctx.fillStyle = hg;
+    ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fill();
+  };
+  const drawArm = (arm, far) => {
+    const [[sx, sy], [ex, ey], [hx, hy]] = arm;
+    seg(sx, sy, ex, ey, limbW * 0.92, colors.shirtDark, colors.shirt, colors.shirtLight);
+    seg(ex, ey, hx, hy, limbW * 0.82, colors.shirtDark, colors.shirt, colors.shirtLight);
+    drawHand(hx, hy);
+    if (far) shade(arm, limbW * 0.95);
+  };
+  const drawTorso = () => {
+    ctx.save();
+    ctx.translate(hipX, hipY);
+    ctx.rotate(lean * dir);
+    if (!back) ctx.scale(dir, 1);
+    const w0 = h * 0.095, w1 = back ? h * 0.145 : h * 0.115;
+    const tg = ctx.createLinearGradient(-w1, 0, w1, 0);
+    if (back) {
+      tg.addColorStop(0, colors.shirtDark); tg.addColorStop(0.45, colors.shirt);
+      tg.addColorStop(0.6, colors.shirtLight); tg.addColorStop(1, colors.shirtDark);
+    } else {
+      tg.addColorStop(0, colors.shirtDark); tg.addColorStop(0.55, colors.shirt);
+      tg.addColorStop(0.85, colors.shirtLight); tg.addColorStop(1, colors.shirt);
+    }
+    ctx.fillStyle = tg;
     ctx.beginPath();
-    ctx.moveTo(dir * headR * 0.78, headY + headR * 0.1);
-    ctx.lineTo(dir * headR * 0.92, headY + headR * 0.28);
-    ctx.stroke();
-  }
-  // guards wear a peaked cap
-  if (colors.cap) {
-    ctx.fillStyle = colors.cap;
-    ctx.beginPath();
-    ctx.arc(0, headY - headR * 0.15, headR * 1.02, Math.PI, Math.PI * 2);
+    ctx.moveTo(-w0, h * 0.03);
+    ctx.lineTo(w0, h * 0.03);
+    ctx.quadraticCurveTo(w1 * 1.05, -TORSO * 0.55, w1 * 0.75, -TORSO - h * 0.01);
+    ctx.quadraticCurveTo(0, -TORSO - h * 0.045, -w1 * 0.85, -TORSO);
+    ctx.quadraticCurveTo(-w1 * 1.05, -TORSO * 0.5, -w0, h * 0.03);
     ctx.closePath();
     ctx.fill();
-    if (!backView) {
-      ctx.fillRect(dir > 0 ? 0 : -headR * 1.45, headY - headR * 0.3, headR * 1.45, headR * 0.22);
-    }
+    ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+    ctx.lineWidth = Math.max(1, h * 0.012);
+    ctx.stroke();
+    // belt + buckle
     ctx.fillStyle = colors.belt;
-    ctx.fillRect(-headR * 0.18, headY - headR * 0.75, headR * 0.36, headR * 0.2);
+    ctx.fillRect(-w0 * 1.02, -h * 0.02, w0 * 2.04, h * 0.05);
+    if (!back) {
+      ctx.fillStyle = colors.buckle;
+      ctx.fillRect(w0 * 0.45, -h * 0.018, h * 0.035, h * 0.045);
+    }
+    ctx.restore();
+  };
+  const headPos = () => [hipX + Math.sin(lean) * dir * (TORSO + h * 0.15), hipY - Math.cos(lean) * (TORSO + h * 0.15)];
+  const drawHead = () => {
+    const [sx, sy] = shoulderOf();
+    const [hx, hy] = headPos();
+    // neck
+    seg(sx, sy, hx, hy + headR * 0.5, h * 0.07, colors.skinDark, colors.skin, null);
+    ctx.save();
+    ctx.translate(hx, hy);
+    if (!back) ctx.scale(dir, 1);
+    const r = headR;
+    const sg = ctx.createRadialGradient(r * 0.35, -r * 0.4, r * 0.1, 0, 0, r * 1.15);
+    sg.addColorStop(0, colors.skinLight);
+    sg.addColorStop(0.55, colors.skin);
+    sg.addColorStop(1, colors.skinDark);
+    ctx.fillStyle = sg;
+    ctx.beginPath(); ctx.arc(0, 0, r, 0, 7); ctx.fill();
+    const hg = ctx.createLinearGradient(0, -r, 0, r * 0.5);
+    hg.addColorStop(0, colors.hairLight);
+    hg.addColorStop(1, colors.hair);
+    if (back) {
+      // back of the head: hair all over, ears peeking out
+      ctx.fillStyle = colors.skinDark;
+      ctx.beginPath(); ctx.ellipse(-r * 0.95, r * 0.1, r * 0.18, r * 0.26, 0, 0, 7); ctx.fill();
+      ctx.beginPath(); ctx.ellipse(r * 0.95, r * 0.1, r * 0.18, r * 0.26, 0, 0, 7); ctx.fill();
+      ctx.fillStyle = hg;
+      ctx.beginPath(); ctx.arc(0, -r * 0.05, r * 1.02, 0, 7); ctx.fill();
+    } else {
+      // nose
+      ctx.fillStyle = colors.skin;
+      ctx.beginPath(); ctx.arc(r * 0.93, r * 0.12, r * 0.2, 0, 7); ctx.fill();
+      // ear
+      ctx.fillStyle = colors.skinDark;
+      ctx.beginPath(); ctx.ellipse(-r * 0.15, r * 0.12, r * 0.17, r * 0.24, 0, 0, 7); ctx.fill();
+      // hair over the top and back
+      ctx.fillStyle = hg;
+      ctx.beginPath();
+      ctx.arc(0, 0, r * 1.06, Math.PI * 0.62, Math.PI * 1.9);
+      ctx.quadraticCurveTo(r * 0.3, -r * 0.45, -r * 0.3, -r * 0.2);
+      ctx.quadraticCurveTo(-r * 0.5, r * 0.3, Math.cos(Math.PI * 0.62) * r * 1.06, Math.sin(Math.PI * 0.62) * r * 1.06);
+      ctx.closePath();
+      ctx.fill();
+      // eye
+      ctx.fillStyle = '#f4f6fa';
+      ctx.beginPath(); ctx.ellipse(r * 0.5, -r * 0.05, r * 0.17, r * 0.22, 0, 0, 7); ctx.fill();
+      ctx.fillStyle = colors.eye;
+      ctx.beginPath(); ctx.arc(r * 0.58, -r * 0.03, r * 0.11, 0, 7); ctx.fill();
+      // brow (guards scowl)
+      ctx.strokeStyle = colors.hair;
+      ctx.lineWidth = Math.max(1, r * 0.13);
+      ctx.beginPath();
+      if (colors.cap) { ctx.moveTo(r * 0.28, -r * 0.42); ctx.lineTo(r * 0.72, -r * 0.26); }
+      else { ctx.moveTo(r * 0.3, -r * 0.34); ctx.lineTo(r * 0.7, -r * 0.36); }
+      ctx.stroke();
+      // mouth
+      ctx.strokeStyle = 'rgba(90,40,30,0.7)';
+      ctx.lineWidth = Math.max(1, r * 0.09);
+      ctx.beginPath(); ctx.moveTo(r * 0.5, r * 0.5); ctx.lineTo(r * 0.75, r * 0.46); ctx.stroke();
+    }
+    // guards wear a peaked cap
+    if (colors.cap) {
+      const cg = ctx.createLinearGradient(0, -r * 1.2, 0, 0);
+      cg.addColorStop(0, colors.capLight);
+      cg.addColorStop(1, colors.cap);
+      ctx.fillStyle = cg;
+      ctx.beginPath();
+      ctx.arc(0, -r * 0.15, r * 1.08, Math.PI, Math.PI * 2);
+      ctx.closePath();
+      ctx.fill();
+      if (!back) {
+        ctx.fillStyle = colors.cap;
+        rrect(ctx, r * 0.1, -r * 0.3, r * 1.4, r * 0.24, r * 0.1);
+        ctx.fill();
+      }
+      ctx.fillStyle = colors.buckle;
+      ctx.fillRect(back ? -r * 0.18 : r * 0.35, -r * 0.62, r * 0.3, r * 0.22);
+    }
+    ctx.restore();
+  };
+
+  // ---- paint back-to-front ----
+  if (back) {
+    drawLeg(legFar, false); drawLeg(legNear, false);
+    drawTorso();
+    drawHead();
+    drawArm(armFar, false); drawArm(armNear, false);
+  } else {
+    drawArm(armFar, true);
+    drawLeg(legFar, true);
+    drawTorso();
+    drawLeg(legNear, false);
+    drawHead();
+    drawArm(armNear, false);
   }
 
   // shovel while digging
   if (pose === 'dig') {
-    const [hx1, hy1] = armL;   // lower/leading hand grips the shaft
-    const [hx0, hy0] = armR;
-    const tipX = hx1 + dir * h * 0.30, tipY = hy1 + h * 0.26;
-    // wooden shaft runs through both hands to the blade
-    ctx.strokeStyle = '#8a6238';
-    ctx.lineWidth = lw * 0.5;
+    const [hx1, hy1] = armNear[2];   // leading hand grips low on the shaft
+    const [hx0, hy0] = armFar[2];
+    const ang = Math.atan2(hy1 - hy0, hx1 - hx0);
+    const tipX = hx1 + Math.cos(ang) * h * 0.2, tipY = hy1 + Math.sin(ang) * h * 0.2;
+    ctx.strokeStyle = '#6e4a26';
+    ctx.lineWidth = limbW * 0.42;
     ctx.beginPath();
-    ctx.moveTo(hx0 - dir * h * 0.1, hy0 - h * 0.12);
+    ctx.moveTo(hx0 - Math.cos(ang) * h * 0.1, hy0 - Math.sin(ang) * h * 0.1);
     ctx.lineTo(tipX, tipY);
     ctx.stroke();
-    // steel blade
+    ctx.strokeStyle = '#b08256';
+    ctx.lineWidth = limbW * 0.14;
+    ctx.stroke();
     ctx.save();
     ctx.translate(tipX, tipY);
-    ctx.rotate(dir * 0.85);
-    const bg2 = ctx.createLinearGradient(0, -h * 0.1, 0, h * 0.1);
-    bg2.addColorStop(0, '#d3dde9');
-    bg2.addColorStop(1, '#8fa2b8');
+    ctx.rotate(ang - Math.PI / 2);
+    const bg2 = ctx.createLinearGradient(-h * 0.08, 0, h * 0.08, 0);
+    bg2.addColorStop(0, '#8fa2b8');
+    bg2.addColorStop(0.45, '#eef3f9');
+    bg2.addColorStop(1, '#7d90a8');
     ctx.fillStyle = bg2;
     ctx.beginPath();
-    ctx.moveTo(-h * 0.07, -h * 0.1);
-    ctx.lineTo(h * 0.07, -h * 0.1);
-    ctx.quadraticCurveTo(h * 0.09, h * 0.06, 0, h * 0.12);
-    ctx.quadraticCurveTo(-h * 0.09, h * 0.06, -h * 0.07, -h * 0.1);
+    ctx.moveTo(-h * 0.07, 0);
+    ctx.lineTo(h * 0.07, 0);
+    ctx.quadraticCurveTo(h * 0.09, h * 0.12, 0, h * 0.16);
+    ctx.quadraticCurveTo(-h * 0.09, h * 0.12, -h * 0.07, 0);
     ctx.closePath();
     ctx.fill();
-    ctx.strokeStyle = 'rgba(40,55,75,0.6)';
-    ctx.lineWidth = Math.max(1, lw * 0.2);
+    ctx.strokeStyle = 'rgba(40,55,75,0.7)';
+    ctx.lineWidth = Math.max(1, limbW * 0.15);
     ctx.stroke();
     ctx.restore();
   }
 
   // carried gold
   if (a.carry) {
-    ctx.fillStyle = '#f2b632';
-    ctx.strokeStyle = 'rgba(90,60,0,0.6)';
-    ctx.lineWidth = 1;
+    const [hx, hy] = headPos();
+    const gy = hy - headR - h * 0.13;
+    const gg = ctx.createLinearGradient(0, gy, 0, gy + h * 0.1);
+    gg.addColorStop(0, '#fff0b0');
+    gg.addColorStop(1, '#c98a14');
+    ctx.fillStyle = gg;
+    ctx.strokeStyle = 'rgba(90,60,0,0.7)';
+    ctx.lineWidth = Math.max(1, h * 0.012);
     ctx.beginPath();
-    ctx.rect(-h * 0.1, headY - headR - h * 0.16, h * 0.2, h * 0.1);
+    ctx.moveTo(hx - h * 0.12, gy + h * 0.1); ctx.lineTo(hx - h * 0.07, gy);
+    ctx.lineTo(hx + h * 0.07, gy); ctx.lineTo(hx + h * 0.12, gy + h * 0.1);
+    ctx.closePath();
     ctx.fill(); ctx.stroke();
   }
   ctx.restore();
 }
 
 const RUNNER_COLORS = {
-  skin: '#e9bb8f', hair: '#6b4a2f',
-  shirt: '#e8eef7', shirtDark: '#aebccf',
-  pants: '#3a6ea5', pantsDark: '#2a5078',
-  shoes: '#26303e', belt: '#f2b632', cap: null,
+  skin: '#efc39a', skinLight: '#ffe2c8', skinDark: '#b27b52',
+  hair: '#4f321d', hairLight: '#8a5a36', eye: '#1c2430',
+  shirt: '#e9eff8', shirtLight: '#ffffff', shirtDark: '#8d9fba',
+  pants: '#3b73b3', pantsLight: '#79a8dd', pantsDark: '#1f3f66',
+  shoes: '#23272f', shoesLight: '#56606f',
+  belt: '#5a3c22', buckle: '#f2b632', cap: null,
 };
 const GUARD_COLORS = {
-  skin: '#dda878', hair: '#2e2622',
-  shirt: '#d9534a', shirtDark: '#9c352e',
-  pants: '#41332f', pantsDark: '#2e2320',
-  shoes: '#1b1512', belt: '#f0a13a', cap: '#37424f',
+  skin: '#d9a171', skinLight: '#f3c79b', skinDark: '#94623e',
+  hair: '#231a16', hairLight: '#4a3a31', eye: '#141a22',
+  shirt: '#d44a3e', shirtLight: '#ff8c74', shirtDark: '#86251f',
+  pants: '#3d3431', pantsLight: '#6a5b55', pantsDark: '#1e1816',
+  shoes: '#14100e', shoesLight: '#40352f',
+  belt: '#1a1412', buckle: '#c9ccd4', cap: '#2c3748', capLight: '#5a6d88',
 };
+
+// draw an actor via the scratch canvas so the whole figure gets one crisp dark outline
+function drawActor(a, colors) {
+  const box = S * 3;
+  const ax = a.x * S + S / 2, ay = a.y * S + S / 2;
+  // soft light around each actor: warm for the runner, a red menace for guards
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  const lr = a.guard ? S * 1.3 : S * 2.4;
+  const lg = ctx.createRadialGradient(ax, ay, 0, ax, ay, lr);
+  lg.addColorStop(0, a.guard ? 'rgba(255,70,50,0.10)' : 'rgba(255,215,150,0.13)');
+  lg.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = lg;
+  ctx.fillRect(ax - lr, ay - lr, lr * 2, lr * 2);
+  ctx.restore();
+
+  figCtx.setTransform(1, 0, 0, 1, 0, 0);
+  figCtx.clearRect(0, 0, figCanvas.width, figCanvas.height);
+  figCtx.setTransform(DPR, 0, 0, DPR, (box / 2 - ax) * DPR, (box / 2 - ay) * DPR);
+  drawFigure(a, colors);
+
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.shadowColor = 'rgba(2,4,8,0.95)';
+  ctx.shadowBlur = Math.max(1.5, S * 0.07) * DPR;
+  ctx.drawImage(figCanvas, Math.round((ax - box / 2) * DPR), Math.round((ay - box / 2) * DPR));
+  ctx.restore();
+}
 
 // --- frame ---
 function render() {
+  if (G.terrainDirty) buildTerrain();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.drawImage(sprites.terrain, 0, 0);
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-  ctx.drawImage(sprites.bg, 0, 0, COLS * S, ROWS * S);
 
   const t = G.time;
 
-  // terrain
-  for (let y = 0; y < ROWS; y++) {
-    for (let x = 0; x < COLS; x++) {
-      const b = G.tiles[y][x];
-      const px = x * S, py = y * S;
-      if (b === T.BRICK || b === T.TRAP) {
-        const h = b === T.BRICK ? holeAt(x, y) : null;
-        if (!h) {
-          ctx.drawImage(sprites.brick, px, py, S, S);
-        } else if (h.opening) {
-          // brick being shoveled out: excavation grows from the top down
-          ctx.drawImage(sprites.brick, px, py, S, S);
-          const p = Math.min(1, h.openT / DIG_TIME);
-          ctx.save();
-          ctx.beginPath();
-          ctx.rect(px, py, S, S * p);
-          ctx.clip();
-          drawHole(px, py);
-          ctx.restore();
-          // cracks spreading ahead of the excavation
-          ctx.strokeStyle = 'rgba(20,8,5,0.6)';
-          ctx.lineWidth = Math.max(1, S * 0.03);
-          ctx.beginPath();
-          ctx.moveTo(px + S * 0.3, py + S * p);
-          ctx.lineTo(px + S * 0.22, py + Math.min(S, S * (p + 0.3)));
-          ctx.moveTo(px + S * 0.7, py + S * p);
-          ctx.lineTo(px + S * 0.78, py + Math.min(S, S * (p + 0.25)));
-          ctx.stroke();
-        } else if (h.closing) {
-          // brick regrows from the top down
-          const p = Math.min(1, h.closeT / HOLE_CLOSE);
-          drawHole(px, py);
-          ctx.save();
-          ctx.beginPath();
-          ctx.rect(px, py, S, S * p);
-          ctx.clip();
-          ctx.drawImage(sprites.brick, px, py, S, S);
-          ctx.restore();
-        } else {
-          drawHole(px, py);
-          if (h.age > HOLE_LIFE - 1.0) {
-            // warning shimmer just before it closes
-            ctx.fillStyle = `rgba(226,87,76,${0.12 + 0.1 * Math.sin(t * 14)})`;
-            ctx.fillRect(px, py, S, S);
-          }
-        }
-      } else if (b === T.SOLID) {
-        ctx.drawImage(sprites.solid, px, py, S, S);
-      } else if (b === T.LADDER) {
-        ctx.drawImage(sprites.ladder, px, py, S, S);
-      } else if (b === T.HLADDER && G.revealed) {
-        ctx.drawImage(sprites.ladder, px, py, S, S);
-        if (G.revealFlash > 0) {
-          ctx.fillStyle = `rgba(255,210,87,${G.revealFlash * 0.45})`;
-          ctx.fillRect(px, py, S, S);
-        }
-      } else if (b === T.ROPE) {
-        ctx.drawImage(sprites.rope, px, py, S, S);
+  // dynamic terrain: holes being dug, open, or closing
+  for (const h of G.holes.values()) {
+    const px = h.x * S, py = h.y * S;
+    if (h.opening) {
+      // brick being shoveled out: excavation grows from the top down
+      const p = Math.min(1, h.openT / DIG_TIME);
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(px, py, S, S * p);
+      ctx.clip();
+      drawHole(px, py);
+      ctx.restore();
+      // cracks spreading ahead of the excavation
+      ctx.strokeStyle = 'rgba(20,8,5,0.7)';
+      ctx.lineWidth = Math.max(1, S * 0.03);
+      ctx.beginPath();
+      ctx.moveTo(px + S * 0.3, py + S * p);
+      ctx.lineTo(px + S * 0.22, py + Math.min(S, S * (p + 0.3)));
+      ctx.moveTo(px + S * 0.7, py + S * p);
+      ctx.lineTo(px + S * 0.78, py + Math.min(S, S * (p + 0.25)));
+      ctx.stroke();
+    } else if (h.closing) {
+      // brick regrows from the top down
+      const p = Math.min(1, h.closeT / HOLE_CLOSE);
+      drawHole(px, py);
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(px, py, S, S * p);
+      ctx.clip();
+      drawBrick(ctx, h.x, h.y);
+      ctx.restore();
+    } else {
+      drawHole(px, py);
+      if (h.age > HOLE_LIFE - 1.0) {
+        // warning glow just before it closes
+        const a = 0.18 + 0.14 * Math.sin(t * 14);
+        const wg = ctx.createLinearGradient(0, py, 0, py + S);
+        wg.addColorStop(0, `rgba(255,90,70,${a})`);
+        wg.addColorStop(1, `rgba(255,90,70,${a * 0.2})`);
+        ctx.fillStyle = wg;
+        ctx.fillRect(px, py, S, S);
       }
     }
   }
+
+  // freshly revealed escape ladders flash gold
+  if (G.revealFlash > 0) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.fillStyle = `rgba(255,200,80,${G.revealFlash * 0.5})`;
+    for (let y = 0; y < ROWS; y++)
+      for (let x = 0; x < COLS; x++)
+        if (G.tiles[y][x] === T.HLADDER) ctx.fillRect(x * S, y * S, S, S);
+    ctx.restore();
+  }
+
+  drawMotes(t);
 
   // gold
   for (let y = 0; y < ROWS; y++)
@@ -1341,17 +1743,33 @@ function render() {
       if (G.goldMap[y][x]) drawGold(x, y, t);
 
   // actors
-  for (const g of G.guards) if (g.state !== 'dead') drawFigure(g, GUARD_COLORS);
-  if (G.state !== 'wipeout') drawFigure(G.runner, RUNNER_COLORS);
+  for (const g of G.guards) if (g.state !== 'dead') drawActor(g, GUARD_COLORS);
+  if (G.state !== 'wipeout') drawActor(G.runner, RUNNER_COLORS);
 
   // particles
+  ctx.save();
   for (const p of G.particles) {
-    ctx.globalAlpha = Math.max(0, p.life / p.maxLife);
-    ctx.fillStyle = p.color;
+    const a = Math.max(0, p.life / p.maxLife);
     const sz = p.size * S;
-    ctx.fillRect(p.x * S + S / 2 - sz / 2, p.y * S + S / 2 - sz / 2, sz, sz);
+    const x = p.x * S + S / 2, y = p.y * S + S / 2;
+    if (p.glow) {
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = a;
+      const gg = ctx.createRadialGradient(x, y, 0, x, y, sz * 3);
+      gg.addColorStop(0, p.color);
+      gg.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = gg;
+      ctx.fillRect(x - sz * 3, y - sz * 3, sz * 6, sz * 6);
+      ctx.fillStyle = '#fffbe8';
+      ctx.fillRect(x - sz * 0.4, y - sz * 0.4, sz * 0.8, sz * 0.8);
+    } else {
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.globalAlpha = a;
+      ctx.fillStyle = p.color;
+      ctx.fillRect(x - sz / 2, y - sz / 2, sz, sz);
+    }
   }
-  ctx.globalAlpha = 1;
+  ctx.restore();
 
   // iris wipe: circle closes where the runner died, reopens at the start stance
   if (G.state === 'wipeout' || G.state === 'wipein') {
@@ -1370,7 +1788,7 @@ function render() {
     ctx.arc(cx, cy, r, 0, Math.PI * 2);
     ctx.fill('evenodd');
     // thin golden rim on the iris edge
-    ctx.strokeStyle = 'rgba(242,182,50,0.35)';
+    ctx.strokeStyle = 'rgba(242,182,50,0.45)';
     ctx.lineWidth = Math.max(1.5, S * 0.06);
     ctx.beginPath();
     ctx.arc(cx, cy, r, 0, Math.PI * 2);
@@ -1379,43 +1797,100 @@ function render() {
 
   // overlays
   if (G.state === 'ready') {
-    banner(`LEVEL ${String(G.level + 1).padStart(3, '0')}`, 'press any movement key to begin');
+    banner(`LEVEL ${String(G.level + 1).padStart(3, '0')}`, 'PRESS ANY MOVEMENT KEY TO BEGIN');
   } else if (G.state === 'won') {
-    ctx.fillStyle = `rgba(255,210,87,${0.12 * Math.sin(G.stateT * 10) + 0.12})`;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.fillStyle = `rgba(255,200,90,${0.1 * Math.sin(G.stateT * 10) + 0.1})`;
     ctx.fillRect(0, 0, COLS * S, ROWS * S);
+    ctx.restore();
+    banner('LEVEL CLEAR', `+${SCORE_LEVEL} BONUS`);
   }
 }
 
+// an open dug hole: dark pit with cut brick walls and rubble at the bottom
 function drawHole(px, py) {
-  ctx.fillStyle = '#05070c';
+  const pit = ctx.createLinearGradient(0, py, 0, py + S);
+  pit.addColorStop(0, '#1c0d09');
+  pit.addColorStop(1, '#060304');
+  ctx.fillStyle = pit;
   ctx.fillRect(px, py, S, S);
-  // ragged edge
-  ctx.fillStyle = 'rgba(140,53,38,0.5)';
-  const n = 5;
-  for (let i = 0; i < n; i++) {
-    const w = S / n;
-    ctx.fillRect(px + i * w, py, w * 0.7, S * 0.08 * ((i * 7 + 3) % 3 + 1) / 3);
+  // cut faces of the surrounding bricks
+  const wall = S * 0.12;
+  const lw = ctx.createLinearGradient(px, 0, px + wall, 0);
+  lw.addColorStop(0, 'rgba(150,62,42,0.75)');
+  lw.addColorStop(1, 'rgba(150,62,42,0)');
+  ctx.fillStyle = lw;
+  ctx.fillRect(px, py, wall, S);
+  const rw = ctx.createLinearGradient(px + S - wall, 0, px + S, 0);
+  rw.addColorStop(0, 'rgba(60,20,12,0)');
+  rw.addColorStop(1, 'rgba(60,20,12,0.85)');
+  ctx.fillStyle = rw;
+  ctx.fillRect(px + S - wall, py, wall, S);
+  // jagged broken lip along the top
+  ctx.fillStyle = '#8c3a28';
+  ctx.beginPath();
+  ctx.moveTo(px, py);
+  const n = 6;
+  for (let i = 0; i <= n; i++) {
+    const jx = px + (i / n) * S;
+    const jy = py + S * (0.03 + ((i * 7 + 3) % 4) * 0.022);
+    ctx.lineTo(jx, jy);
   }
-  ctx.fillStyle = 'rgba(0,0,0,0.5)';
-  ctx.fillRect(px, py, S * 0.1, S);
-  ctx.fillRect(px + S * 0.9, py, S * 0.1, S);
+  ctx.lineTo(px + S, py);
+  ctx.closePath();
+  ctx.fill();
+  // rubble
+  ctx.fillStyle = 'rgba(120,48,32,0.7)';
+  for (let i = 0; i < 5; i++) {
+    const rx = px + S * (0.14 + i * 0.18), rs = S * (0.05 + ((i * 5) % 3) * 0.02);
+    ctx.beginPath();
+    ctx.ellipse(rx, py + S - rs * 0.5, rs, rs * 0.6, 0, Math.PI, 0);
+    ctx.fill();
+  }
 }
 
 function banner(title, sub) {
   const w = COLS * S, h = ROWS * S;
-  ctx.fillStyle = 'rgba(5,8,13,0.55)';
-  ctx.fillRect(0, h * 0.36, w, h * 0.24);
-  ctx.textAlign = 'center';
-  ctx.fillStyle = '#f2b632';
-  ctx.font = `800 ${S * 1.15}px "Segoe UI", sans-serif`;
-  ctx.shadowColor = 'rgba(242,182,50,0.5)';
-  ctx.shadowBlur = S * 0.5;
-  ctx.fillText(title, w / 2, h * 0.47);
+  const pw = Math.min(w * 0.6, S * 15), ph = S * 3.1;
+  const x0 = (w - pw) / 2, y0 = h * 0.5 - ph / 2;
+  ctx.save();
+  ctx.fillStyle = 'rgba(3,6,12,0.35)';
+  ctx.fillRect(0, 0, w, h);
+  ctx.shadowColor = 'rgba(0,0,0,0.7)';
+  ctx.shadowBlur = S * 0.9;
+  const pg = ctx.createLinearGradient(0, y0, 0, y0 + ph);
+  pg.addColorStop(0, 'rgba(30,41,64,0.94)');
+  pg.addColorStop(1, 'rgba(14,20,34,0.94)');
+  ctx.fillStyle = pg;
+  rrect(ctx, x0, y0, pw, ph, S * 0.3);
+  ctx.fill();
   ctx.shadowBlur = 0;
-  ctx.fillStyle = '#8b98ac';
-  ctx.font = `500 ${S * 0.42}px "Segoe UI", sans-serif`;
-  ctx.fillText(sub, w / 2, h * 0.55);
+  ctx.strokeStyle = 'rgba(242,182,50,0.45)';
+  ctx.lineWidth = Math.max(1, S * 0.035);
+  ctx.stroke();
+  ctx.fillStyle = '#f2b632';
+  ctx.fillRect(x0 + pw * 0.32, y0 - Math.max(1, S * 0.03), pw * 0.36, Math.max(2, S * 0.07));
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  if ('letterSpacing' in ctx) ctx.letterSpacing = `${S * 0.1}px`;
+  const tg = ctx.createLinearGradient(0, y0 + ph * 0.22, 0, y0 + ph * 0.58);
+  tg.addColorStop(0, '#ffe7a0');
+  tg.addColorStop(1, '#e8a526');
+  ctx.fillStyle = tg;
+  ctx.font = `800 ${S * 1.15}px "Segoe UI", system-ui, sans-serif`;
+  ctx.shadowColor = 'rgba(242,182,50,0.55)';
+  ctx.shadowBlur = S * 0.5;
+  ctx.fillText(title, w / 2, y0 + ph * 0.42);
+  ctx.shadowBlur = 0;
+  if ('letterSpacing' in ctx) ctx.letterSpacing = `${S * 0.08}px`;
+  ctx.fillStyle = `rgba(170,184,206,${0.65 + 0.35 * Math.sin(G.time * 3)})`;
+  ctx.font = `600 ${S * 0.36}px "Segoe UI", system-ui, sans-serif`;
+  ctx.fillText(sub, w / 2, y0 + ph * 0.76);
+  ctx.restore();
 }
+
 
 // ---------------- HUD ----------------
 const hudEls = {
@@ -1426,6 +1901,7 @@ const hudEls = {
   lives: document.getElementById('hud-lives'),
 };
 const hudCache = {};
+const goldBar = document.getElementById('hud-gold-bar');
 function setHud(el, v) { if (hudCache[el] !== v) { hudCache[el] = v; hudEls[el].textContent = v; } }
 function updateHud() {
   setHud('level', String(G.level + 1).padStart(3, '0'));
@@ -1433,6 +1909,8 @@ function updateHud() {
   setHud('hi', String(Math.max(SAVE.hi, G.score)));
   setHud('gold', `${G.goldTotal - G.goldLeft}/${G.goldTotal}`);
   setHud('lives', String(G.lives));
+  const pct = G.goldTotal ? Math.round(100 * (G.goldTotal - G.goldLeft) / G.goldTotal) : 0;
+  if (hudCache.bar !== pct) { hudCache.bar = pct; goldBar.style.width = pct + '%'; }
 }
 
 // ---------------- Modals ----------------

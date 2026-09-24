@@ -38,64 +38,127 @@ html, body {
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  padding: 0.55rem 1.1rem;
-  background: linear-gradient(180deg, var(--bg-2), var(--bg-1));
+  padding: 0.6rem 1.2rem;
+  background: linear-gradient(180deg, #1a2336, var(--bg-1));
   border-bottom: 1px solid var(--line);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
   user-select: none;
   flex: 0 0 auto;
+  position: relative;
+  z-index: 2;
+}
+#hud::after {
+  content: "";
+  position: absolute;
+  left: 0; right: 0; bottom: -1px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(242, 182, 50, 0.45), transparent);
 }
 
 .hud-left, .hud-center, .hud-right {
   display: flex;
   align-items: center;
-  gap: 1.2rem;
+  gap: 0.7rem;
 }
+.hud-left { gap: 1.1rem; }
+
+.hud-logo { display: flex; align-items: center; gap: 0.55rem; }
+.logo-mark { width: 30px; height: 23px; filter: drop-shadow(0 0 6px rgba(242, 182, 50, 0.45)); }
 
 .hud-title {
   font-weight: 800;
-  letter-spacing: 0.18em;
+  letter-spacing: 0.2em;
   font-size: 1.05rem;
-  color: var(--gold);
-  text-shadow: 0 0 14px rgba(242, 182, 50, 0.35);
+  background: linear-gradient(180deg, #ffe9a8, var(--gold) 60%, #c98a14);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
   white-space: nowrap;
 }
 
 .hd-tag {
   margin-left: 0.45em;
-  font-size: 0.62em;
+  font-size: 0.6em;
   vertical-align: 0.25em;
-  color: var(--bg-0);
-  background: var(--gold);
+  color: #1a1405;
+  -webkit-text-fill-color: #1a1405;
+  background: linear-gradient(180deg, var(--gold-bright), var(--gold));
   border-radius: 4px;
-  padding: 0.1em 0.4em;
+  padding: 0.12em 0.42em;
   letter-spacing: 0.1em;
 }
 
-.hud-stat { display: flex; flex-direction: column; align-items: center; min-width: 3.6rem; }
-.hud-label { font-size: 0.6rem; letter-spacing: 0.22em; color: var(--text-dim); }
+.hud-chip, .hud-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-width: 4.6rem;
+  padding: 0.3rem 0.8rem 0.35rem;
+  background: rgba(8, 12, 20, 0.55);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  position: relative;
+}
+.hud-chip { border-color: rgba(242, 182, 50, 0.35); }
+.hud-label { font-size: 0.58rem; font-weight: 700; letter-spacing: 0.24em; color: var(--text-dim); }
 .hud-value {
   font-family: Consolas, "Cascadia Mono", monospace;
-  font-size: 1.12rem;
+  font-size: 1.15rem;
   font-weight: 700;
   color: var(--text);
   font-variant-numeric: tabular-nums;
+  line-height: 1.15;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
 }
+.hud-value.dim { color: #aab6c8; }
+.hud-chip .hud-value { color: var(--gold-bright); }
 #hud-gold  { color: var(--gold-bright); }
-#hud-lives { color: var(--danger); }
+.hud-stat.gold { min-width: 5.6rem; padding-bottom: 0.55rem; }
+.hud-bar {
+  position: absolute;
+  left: 0.7rem; right: 0.7rem; bottom: 0.3rem;
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.07);
+  overflow: hidden;
+}
+.hud-bar i {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: linear-gradient(90deg, #c98a14, var(--gold-bright));
+  box-shadow: 0 0 8px rgba(255, 210, 87, 0.7);
+  transition: width 0.3s ease;
+}
+.hud-stat.lives .hud-value { color: #ff7a6e; }
+.hud-stat.lives svg { width: 14px; height: 14px; fill: var(--danger); filter: drop-shadow(0 0 4px rgba(226, 87, 76, 0.6)); }
 
 .hud-btn {
-  background: var(--panel);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  background: linear-gradient(180deg, #1c2638, var(--panel));
   color: var(--text-dim);
   border: 1px solid var(--line);
-  border-radius: 7px;
-  font: 600 0.68rem/1 "Segoe UI", sans-serif;
+  border-radius: 8px;
+  font: 700 0.66rem/1 "Segoe UI", sans-serif;
   letter-spacing: 0.14em;
-  padding: 0.55rem 0.8rem;
+  padding: 0.6rem 0.85rem;
   cursor: pointer;
   transition: all 0.15s ease;
   white-space: nowrap;
 }
-.hud-btn:hover { color: var(--gold); border-color: var(--gold); }
+.hud-btn svg { width: 12px; height: 12px; fill: currentColor; }
+.hud-btn:hover {
+  color: var(--gold-bright);
+  border-color: rgba(242, 182, 50, 0.7);
+  box-shadow: 0 0 14px rgba(242, 182, 50, 0.18);
+  transform: translateY(-1px);
+}
 
 /* ---------------- Stage ---------------- */
 #stage {
@@ -104,18 +167,29 @@ html, body {
   align-items: center;
   justify-content: center;
   min-height: 0;
-  padding: 10px;
+  padding: 14px;
   background:
-    radial-gradient(1200px 700px at 50% 30%, rgba(63, 167, 214, 0.05), transparent 60%),
+    radial-gradient(1200px 700px at 50% 20%, rgba(63, 120, 214, 0.09), transparent 60%),
+    radial-gradient(900px 500px at 50% 110%, rgba(242, 182, 50, 0.05), transparent 70%),
     var(--bg-0);
 }
 
-#game {
-  border-radius: 6px;
+#frame {
+  padding: 5px;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #2a354b, #121927 40%, #0c111b);
   box-shadow:
-    0 0 0 1px var(--line),
-    0 24px 70px rgba(0, 0, 0, 0.6),
-    0 0 90px rgba(242, 182, 50, 0.05);
+    0 0 0 1px #070a10,
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 28px 80px rgba(0, 0, 0, 0.65),
+    0 0 120px rgba(80, 130, 220, 0.08);
+  line-height: 0;
+}
+
+#game {
+  display: block;
+  border-radius: 7px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.8);
   max-width: 100%;
   max-height: 100%;
 }
@@ -125,8 +199,8 @@ html, body {
   flex: 0 0 auto;
   display: flex;
   justify-content: center;
-  gap: 2.2rem;
-  padding: 0.45rem 1rem;
+  gap: 2rem;
+  padding: 0.5rem 1rem;
   background: var(--bg-1);
   border-top: 1px solid var(--line);
   color: var(--text-dim);
@@ -134,7 +208,16 @@ html, body {
   letter-spacing: 0.05em;
   user-select: none;
 }
-#keys-bar b { color: var(--text); font-family: Consolas, monospace; }
+#keys-bar b {
+  color: var(--text);
+  font-family: Consolas, monospace;
+  background: linear-gradient(180deg, #243047, #172030);
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 0.05rem 0.4rem;
+  margin-right: 0.2rem;
+}
 
 /* ---------------- Modals ---------------- */
 #modal-backdrop {
@@ -266,7 +349,11 @@ html, body {
 .level-cell.done { background: rgba(76, 175, 125, 0.12); color: var(--ok); border-color: rgba(76, 175, 125, 0.4); }
 .level-cell.current { background: rgba(242, 182, 50, 0.15); color: var(--gold-bright); border-color: var(--gold); }
 
+@media (max-width: 1100px) {
+  .hud-btn span { display: none; }
+}
 @media (max-width: 900px) {
   .hud-left .hud-title { display: none; }
+  .hud-chip, .hud-stat { min-width: 3.6rem; padding: 0.25rem 0.5rem; }
   #keys-bar { gap: 1rem; font-size: 0.65rem; }
 }

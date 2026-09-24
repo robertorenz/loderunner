@@ -4,31 +4,49 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Lode Runner — HD Remaster</title>
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=3">
 </head>
 <body>
 <div id="app">
   <header id="hud">
     <div class="hud-left">
-      <div class="hud-title">LODE&nbsp;RUNNER<span class="hd-tag">HD</span></div>
-      <div class="hud-stat"><span class="hud-label">LEVEL</span><span id="hud-level" class="hud-value">001</span></div>
+      <div class="hud-logo">
+        <svg class="logo-mark" viewBox="0 0 32 24" aria-hidden="true">
+          <path d="M3 22 L7 13 H15 L19 22 Z" fill="url(#lg)"/>
+          <path d="M13 22 L17 13 H25 L29 22 Z" fill="url(#lg)"/>
+          <path d="M8 12 L12 3 H20 L24 12 Z" fill="url(#lg)"/>
+          <defs><linearGradient id="lg" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="#fff0b8"/><stop offset=".45" stop-color="#ffd257"/><stop offset="1" stop-color="#b57e12"/>
+          </linearGradient></defs>
+        </svg>
+        <div class="hud-title">LODE&nbsp;RUNNER<span class="hd-tag">HD</span></div>
+      </div>
+      <div class="hud-chip"><span class="hud-label">LEVEL</span><span id="hud-level" class="hud-value">001</span></div>
     </div>
     <div class="hud-center">
       <div class="hud-stat"><span class="hud-label">SCORE</span><span id="hud-score" class="hud-value">0</span></div>
-      <div class="hud-stat"><span class="hud-label">HIGH</span><span id="hud-hiscore" class="hud-value">0</span></div>
-      <div class="hud-stat"><span class="hud-label">GOLD</span><span id="hud-gold" class="hud-value">0/0</span></div>
-      <div class="hud-stat"><span class="hud-label">LIVES</span><span id="hud-lives" class="hud-value">5</span></div>
+      <div class="hud-stat"><span class="hud-label">HIGH</span><span id="hud-hiscore" class="hud-value dim">0</span></div>
+      <div class="hud-stat gold">
+        <span class="hud-label">GOLD</span><span id="hud-gold" class="hud-value">0/0</span>
+        <div class="hud-bar"><i id="hud-gold-bar"></i></div>
+      </div>
+      <div class="hud-stat lives"><span class="hud-label">LIVES</span>
+        <span class="hud-value"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 14s-6-3.6-6-8.1C2 3.7 3.6 2 5.6 2 6.8 2 7.6 2.6 8 3.4 8.4 2.6 9.2 2 10.4 2 12.4 2 14 3.7 14 5.9 14 10.4 8 14 8 14z"/></svg><span id="hud-lives">5</span></span>
+      </div>
     </div>
     <div class="hud-right">
-      <button class="hud-btn" id="btn-levels" title="Level select (L)">LEVELS</button>
-      <button class="hud-btn" id="btn-restart" title="Restart level (R)">RESTART</button>
-      <button class="hud-btn" id="btn-pause" title="Pause (P)">PAUSE</button>
+      <button class="hud-btn" id="btn-levels" title="Level select (L)">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 2h5v5H2zM9 2h5v5H9zM2 9h5v5H2zM9 9h5v5H9z"/></svg><span>LEVELS</span></button>
+      <button class="hud-btn" id="btn-restart" title="Restart level (R)">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3a5 5 0 1 0 5 5h-2a3 3 0 1 1-3-3v2.5L11.5 4 8 .5z"/></svg><span>RESTART</span></button>
+      <button class="hud-btn" id="btn-pause" title="Pause (P)">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2h3v12H4zM9 2h3v12H9z"/></svg><span>PAUSE</span></button>
       <button class="hud-btn" id="btn-sound" title="Sound (M)">SOUND: ON</button>
     </div>
   </header>
 
   <main id="stage">
-    <canvas id="game"></canvas>
+    <div id="frame"><canvas id="game"></canvas></div>
   </main>
 
   <footer id="keys-bar">
@@ -48,8 +66,8 @@
   </div>
 </div>
 
-<script src="levels.js"></script>
-<script src="audio.js"></script>
-<script src="game.js"></script>
+<script src="levels.js?v=3"></script>
+<script src="audio.js?v=3"></script>
+<script src="game.js?v=3"></script>
 </body>
 </html>
