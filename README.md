@@ -8,6 +8,8 @@ A high-resolution browser remake of the 1983 Broderbund classic by Doug Smith, f
 
 Open `index.html` in any modern browser — that's it. (Or serve the folder, e.g. `python -m http.server`, and browse to it.)
 
+Scripts and styles are loaded with a `?v=N` version query to defeat stale browser caches; if an update doesn't show, hard-refresh (Ctrl+F5).
+
 ## Controls
 
 | Key | Action |
@@ -33,6 +35,7 @@ Collect every gold chest in the level, then climb to the top to escape. Guards c
 - Hand-textured terrain: every brick and bedrock block is procedurally varied, with lit top surfaces and chipped edges
 - Volumetric, skeleton-animated characters: jointed arms and legs with a real run cycle (stride, knee tuck, push-off, arm counter-swing) tied to distance traveled, a back-view rung-by-rung ladder climb, and hand-over-hand rope traversal
 - Glowing gold with bloom and glints, additive sparkle particles, animated dig/close holes
+- Polished HUD: stat cards, live gold-progress bar, icon buttons, framed stage and in-canvas level banners
 - Classic guard AI: BFS pathfinding with authentic falling/climbing rules, hole trapping, gold carrying, and respawning
 - Procedurally generated sprites and WebAudio-synthesized sound effects — zero asset files
 - Level select for all 150 levels with completion tracking
@@ -43,7 +46,7 @@ Collect every gold chest in the level, then climb to the top to escape. Guards c
 | File | Purpose |
 |---|---|
 | `index.html` | Page shell, HUD, and modal system |
-| `style.css` | Dark professional theme |
+| `style.css` | Dark professional theme: HUD, stage frame, modals |
 | `game.js` | Engine: physics, digging, guard AI, rendering, UI |
 | `levels.js` | All 150 original level grids (28×16) |
 | `audio.js` | WebAudio synthesized sound effects |
