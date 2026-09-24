@@ -29,7 +29,10 @@ Collect every gold chest in the level, then climb to the top to escape. Guards c
 ## Features
 
 - All 150 original levels, extracted from the Apple II disk image (level data via [SimonHung/LodeRunner](https://github.com/SimonHung/LodeRunner))
-- Crisp high-DPI canvas rendering with smoothly animated vector characters
+- Crisp high-DPI canvas rendering with a lit stone backdrop, cast shadows, light shafts and drifting dust
+- Hand-textured terrain: every brick and bedrock block is procedurally varied, with lit top surfaces and chipped edges
+- Volumetric, skeleton-animated characters: jointed arms and legs with a real run cycle (stride, knee tuck, push-off, arm counter-swing) tied to distance traveled, a back-view rung-by-rung ladder climb, and hand-over-hand rope traversal
+- Glowing gold with bloom and glints, additive sparkle particles, animated dig/close holes
 - Classic guard AI: BFS pathfinding with authentic falling/climbing rules, hole trapping, gold carrying, and respawning
 - Procedurally generated sprites and WebAudio-synthesized sound effects — zero asset files
 - Level select for all 150 levels with completion tracking
